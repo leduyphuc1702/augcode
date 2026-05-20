@@ -1,0 +1,42 @@
+[
+  {
+    "query": "how does the sync engine work",
+    "expected_files": ["crates/jcode-codebase-sync/src/lib.rs"]
+  },
+  {
+    "query": "read file tool with snapshot auth",
+    "expected_files": ["src/tool/read_file.rs"]
+  },
+  {
+    "query": "commit lineage search git history",
+    "expected_files": ["src/tool/commit_lineage_search.rs"]
+  },
+  {
+    "query": "codebase search retrieval engine",
+    "expected_files": ["crates/jcode-codebase-retrieval/src/lib.rs"]
+  },
+  {
+    "query": "query planner intent detection",
+    "expected_files": ["crates/jcode-codebase-retrieval/src/query_planner.rs"]
+  },
+  {
+    "query": "BM25 lexical index search",
+    "expected_files": ["crates/jcode-codebase-retrieval/src/lexical_index.rs"]
+  },
+  {
+    "query": "manifest store workspace",
+    "expected_files": ["crates/jcode-codebase-sync/src/lib.rs"]
+  },
+  {
+    "query": "dependency graph BFS distance",
+    "expected_files": ["crates/jcode-codebase-retrieval/src/lib.rs"]
+  },
+  {
+    "query": "sync status tool",
+    "expected_files": ["src/tool/sync_status.rs"]
+  },
+  {
+    "query": "sync drain outbox",
+    "expected_files": ["src/tool/sync_drain.rs"]
+  }
+]

@@ -4,10 +4,15 @@ use jcode_codebase_sync::{
     SymbolIndex, UnsavedBufferIndex,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
+
+pub mod lexical_index;
+pub mod query_planner;
+use lexical_index::LexicalIndex;
+use query_planner::{QueryPlanner, SourceWeights};
 
 const DEFAULT_TOKEN_BUDGET: usize = 8_000;
 const MAX_RANGE_LINES: usize = 12;
@@ -82,6 +87,9 @@ pub struct RetrievalEvalReport {
     pub cases_total: usize,
     pub recall_at_5_hits: usize,
     pub recall_at_5_rate_bps: u32,
+    pub recall_at_20_hits: usize,
+    pub recall_at_20_rate_bps: u32,
+    pub mrr_bps: u32,
     pub stale_context_count: usize,
     pub unauthorized_candidate_count: usize,
 }
@@ -151,6 +159,9 @@ impl CodebaseRetrievalEngine {
             cases_total: cases.len(),
             recall_at_5_hits: 0,
             recall_at_5_rate_bps: 0,
+            recall_at_20_hits: 0,
+            recall_at_20_rate_bps: 0,
+            mrr_bps: 0,
             stale_context_count: 0,
             unauthorized_candidate_count: 0,
         };
@@ -174,15 +185,29 @@ impl CodebaseRetrievalEngine {
                     issued_at: chrono::Utc::now(),
                 }
             });
-            let top_paths: Vec<_> = response
+            let all_paths: Vec<_> = response
                 .context_pack
                 .files
                 .iter()
-                .take(5)
                 .map(|file| file.path.as_str())
                 .collect();
-            if case.expected_files.iter().any(|expected| top_paths.contains(&expected.as_str())) {
+            let top_5: Vec<_> = all_paths.iter().take(5).copied().collect();
+            if case.expected_files.iter().any(|expected| top_5.contains(&expected.as_str())) {
                 report.recall_at_5_hits += 1;
+            }
+            let top_20: Vec<_> = all_paths.iter().take(20).copied().collect();
+            if case.expected_files.iter().any(|expected| top_20.contains(&expected.as_str())) {
+                report.recall_at_20_hits += 1;
+            }
+            let mut rank = None;
+            for (i, path) in all_paths.iter().enumerate() {
+                if case.expected_files.contains(&path.to_string()) {
+                    rank = Some(i + 1);
+                    break;
+                }
+            }
+            if let Some(r) = rank {
+                report.mrr_bps += (10_000 / r) as u32;
             }
             for file in &response.context_pack.files {
                 if !token.authorize_path_hash(&file.path, &file.content_hash)
@@ -201,7 +226,11 @@ impl CodebaseRetrievalEngine {
             }
         }
         if report.cases_total > 0 {
-            report.recall_at_5_rate_bps = ((report.recall_at_5_hits * 10_000) / report.cases_total) as u32;
+            report.recall_at_5_rate_bps =
+                ((report.recall_at_5_hits * 10_000) / report.cases_total) as u32;
+            report.recall_at_20_rate_bps =
+                ((report.recall_at_20_hits * 10_000) / report.cases_total) as u32;
+            report.mrr_bps = report.mrr_bps / report.cases_total as u32;
         }
         Ok(report)
     }
@@ -212,18 +241,21 @@ impl CodebaseRetrievalEngine {
             || !delta.modified.is_empty()
             || !delta.removed.is_empty();
         let token = jcode_codebase_sync::SnapshotTokenPayload::from_manifest(&manifest);
+        let graph = DependencyGraph::rebuild(root, &manifest)?;
+        let graph_distances = bfs_distances(&graph, req.active_file.as_deref());
         let mut candidates = search_unsaved_buffers(&req);
         candidates.extend(search_overlay(root, &manifest, &req)?);
         candidates.extend(search_symbols(root, &manifest, &req)?);
         candidates.extend(search_vector(root, &manifest, &req)?);
         candidates.extend(search_manifest_files(root, &manifest.files.values().collect::<Vec<_>>(), &req)?);
-        let graph_neighbors = search_graph_neighbors(root, &manifest, &candidates)?;
+        let graph_neighbors = search_graph_neighbors_with_graph(&graph, &manifest, root, &candidates)?;
         candidates.extend(graph_neighbors);
         candidates.retain(|candidate| {
             candidate.why == "unsaved buffer matches current editor state"
                 || token.authorize_path_hash(&candidate.path, &candidate.content_hash)
         });
-        rerank_candidates(&mut candidates, &req);
+        let plan = QueryPlanner::plan(&req.query);
+        rerank_candidates(&mut candidates, &req, &plan.weights, &graph_distances, &plan.intent);
         let snapshot_id = format!(
             "{}:{}:{}",
             manifest.workspace_id,
@@ -352,29 +384,29 @@ fn search_vector(
         .collect())
 }
 
-fn search_graph_neighbors(
-    root: &Path,
+fn search_graph_neighbors_with_graph(
+    graph: &DependencyGraph,
     manifest: &jcode_codebase_sync::Manifest,
+    root: &Path,
     candidates: &[Candidate],
 ) -> Result<Vec<Candidate>> {
-    let graph = DependencyGraph::rebuild(root, manifest)?;
     let candidate_paths: HashSet<_> = candidates.iter().map(|candidate| candidate.path.as_str()).collect();
     let mut neighbors = Vec::new();
-    for edge in graph.edges {
+    for edge in &graph.edges {
         let neighbor_path = if candidate_paths.contains(edge.from.as_str()) {
-            edge.to
+            &edge.to
         } else if candidate_paths.contains(edge.to.as_str()) {
-            edge.from
+            &edge.from
         } else {
             continue;
         };
-        let Some(entry) = manifest.files.get(&neighbor_path) else {
+        let Some(entry) = manifest.files.get(neighbor_path) else {
             continue;
         };
-        let text = fs::read_to_string(root.join(&neighbor_path))?;
+        let text = fs::read_to_string(root.join(neighbor_path))?;
         let lines: Vec<_> = text.lines().take(MAX_RANGE_LINES).collect();
         neighbors.push(Candidate {
-            path: neighbor_path,
+            path: neighbor_path.clone(),
             content_hash: entry.content_hash.clone(),
             score: 250,
             range: ContextRange {
@@ -388,14 +420,51 @@ fn search_graph_neighbors(
     Ok(neighbors)
 }
 
+fn bfs_distances(graph: &DependencyGraph, start: Option<&str>) -> HashMap<String, usize> {
+    let mut distances = HashMap::new();
+    let Some(start) = start else {
+        return distances;
+    };
+    let mut queue = std::collections::VecDeque::new();
+    queue.push_back((start.to_string(), 0usize));
+    distances.insert(start.to_string(), 0);
+    while let Some((current, dist)) = queue.pop_front() {
+        for edge in &graph.edges {
+            let neighbor = if edge.from == current {
+                &edge.to
+            } else if edge.to == current {
+                &edge.from
+            } else {
+                continue;
+            };
+            if distances.contains_key(neighbor) {
+                continue;
+            }
+            distances.insert(neighbor.clone(), dist + 1);
+            queue.push_back((neighbor.clone(), dist + 1));
+        }
+    }
+    distances
+}
+
 fn search_manifest_files(root: &Path, files: &[&FileEntry], req: &RetrievalRequest) -> Result<Vec<Candidate>> {
     let terms = query_terms(&req.query);
     if terms.is_empty() {
         return Ok(Vec::new());
     }
-    let mut candidates = Vec::new();
+    let mut index = LexicalIndex::new();
     for entry in files {
-        let path_score = score_text(&entry.path, &terms) * 3;
+        let path = root.join(&entry.path);
+        let text = fs::read_to_string(&path).unwrap_or_default();
+        let doc_text = format!("{} {} {}", entry.path, entry.path.replace('/', " "), text);
+        index.add_document(&entry.path, &doc_text);
+    }
+    let bm25_hits = index.search(&req.query, 50);
+    let mut candidates = Vec::new();
+    for hit in bm25_hits {
+        let Some(entry) = files.iter().find(|e| e.path == hit.doc_id).copied() else {
+            continue;
+        };
         let path = root.join(&entry.path);
         let text = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
         let lines: Vec<_> = text.lines().collect();
@@ -408,7 +477,9 @@ fn search_manifest_files(root: &Path, files: &[&FileEntry], req: &RetrievalReque
                 best_line = Some(index);
             }
         }
-        let total_score = path_score + best_line_score;
+        let path_score = score_text(&entry.path, &terms) * 3;
+        let bm25_score = (hit.score * 100.0) as usize;
+        let total_score = bm25_score + path_score + best_line_score;
         if total_score == 0 {
             continue;
         }
@@ -438,7 +509,13 @@ fn search_manifest_files(root: &Path, files: &[&FileEntry], req: &RetrievalReque
     Ok(candidates)
 }
 
-fn rerank_candidates(candidates: &mut [Candidate], req: &RetrievalRequest) {
+fn rerank_candidates(
+    candidates: &mut [Candidate],
+    req: &RetrievalRequest,
+    weights: &SourceWeights,
+    graph_distances: &HashMap<String, usize>,
+    intent: &query_planner::QueryIntent,
+) {
     let query = term_set(&req.query);
     for candidate in candidates.iter_mut() {
         let content = term_set(&format!("{}\n{}", candidate.path, candidate.range.text));
@@ -448,14 +525,90 @@ fn rerank_candidates(candidates: &mut [Candidate], req: &RetrievalRequest) {
         if req.active_file.as_deref() == Some(candidate.path.as_str()) {
             candidate.score += 25;
         }
-        if candidate.path.contains("/test") || candidate.path.ends_with("_test.rs") {
-            candidate.score += 5;
-        }
         if is_generated_or_vendor_path(&candidate.path) {
             candidate.score = candidate.score.saturating_sub(50);
         }
+        candidate.score += source_weight_bonus(&candidate.why, weights);
+        candidate.score += graph_distance_bonus(&candidate.path,
+            req.active_file.as_deref(),
+            graph_distances,
+        );
+        candidate.score += same_package_bonus(&candidate.path,
+            req.active_file.as_deref(),
+        );
+        candidate.score += test_config_bonus(&candidate.path,
+            intent,
+        );
     }
     candidates.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.path.cmp(&b.path)));
+}
+
+fn graph_distance_bonus(
+    candidate_path: &str,
+    active_file: Option<&str>,
+    distances: &HashMap<String, usize>,
+) -> usize {
+    let Some(active) = active_file else {
+        return 0;
+    };
+    if candidate_path == active {
+        return 0;
+    }
+    let Some(dist) = distances.get(candidate_path) else {
+        return 0;
+    };
+    match *dist {
+        1 => 40,
+        2 => 20,
+        3 => 10,
+        _ => 0,
+    }
+}
+
+fn same_package_bonus(candidate_path: &str, active_file: Option<&str>) -> usize {
+    let Some(active) = active_file else {
+        return 0;
+    };
+    let candidate_parts: Vec<_> = candidate_path.split('/').collect();
+    let active_parts: Vec<_> = active.split('/').collect();
+    let common = candidate_parts
+        .iter()
+        .zip(active_parts.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+    common.saturating_sub(1) * 10
+}
+
+fn test_config_bonus(candidate_path: &str, intent: &query_planner::QueryIntent) -> usize {
+    let is_test = candidate_path.contains("/test") || candidate_path.ends_with("_test.rs");
+    let is_config = candidate_path.ends_with(".toml")
+        || candidate_path.ends_with(".yaml")
+        || candidate_path.ends_with(".yml")
+        || candidate_path.ends_with(".json");
+    match intent {
+        query_planner::QueryIntent::Test if is_test => 30,
+        query_planner::QueryIntent::Test if is_config => 15,
+        query_planner::QueryIntent::Debug if is_test => 15,
+        query_planner::QueryIntent::Review if is_config => 10,
+        _ if is_test => 5,
+        _ => 0,
+    }
+}
+
+fn source_weight_bonus(why: &str, weights: &SourceWeights) -> usize {
+    if why == "unsaved buffer matches current editor state" {
+        weights.unsaved_buffer.max(0) as usize
+    } else if why == "saved local overlay matches current snapshot" {
+        weights.overlay.max(0) as usize
+    } else if why.starts_with("symbol definition match:") {
+        weights.symbol.max(0) as usize
+    } else if why == "exact local vector match current snapshot" {
+        weights.vector.max(0) as usize
+    } else if why == "dependency graph neighbor" {
+        weights.graph_neighbor.max(0) as usize
+    } else {
+        weights.manifest.max(0) as usize
+    }
 }
 
 fn term_set(text: &str) -> HashSet<String> {
@@ -785,6 +938,9 @@ mod tests {
                 token_budget: None,
                 unsaved_buffers: Vec::new(),
             },
+            &SourceWeights::default(),
+            &HashMap::new(),
+            &query_planner::QueryIntent::General,
         );
         assert_eq!(candidates[0].path, "src/auth.rs");
     }
@@ -854,6 +1010,33 @@ mod tests {
         assert_eq!(report.recall_at_5_rate_bps, 10_000);
         assert_eq!(report.stale_context_count, 0);
         assert_eq!(report.unauthorized_candidate_count, 0);
+    }
+
+    #[test]
+    #[ignore = "slow: runs on full repo"]
+    fn eval_real_repo_recall_at_5_above_threshold() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let store = TempDir::new().unwrap();
+        let engine = CodebaseRetrievalEngine::new(CodebaseSyncEngine::new(ManifestStore::new(
+            store.path().to_path_buf(),
+        )));
+        let fixture = root.join("fixtures").join("retrieval_eval.json");
+        if !fixture.exists() {
+            return;
+        }
+        let report = engine.eval_fixture(&root, &fixture).unwrap();
+        assert!(
+            report.recall_at_5_rate_bps >= 6_000,
+            "Recall@5 {} bps below 60% threshold. cases={} hits={}",
+            report.recall_at_5_rate_bps,
+            report.cases_total,
+            report.recall_at_5_hits
+        );
     }
 
     #[test]
