@@ -25,12 +25,14 @@ mod multiedit;
 mod open;
 mod patch;
 mod read;
+mod read_file;
 pub mod selfdev;
 mod session_search;
 mod side_panel;
 mod skill;
 mod sync_drain;
 mod sync_status;
+mod commit_lineage_search;
 mod task;
 mod todo;
 mod webfetch;
@@ -142,6 +144,18 @@ impl Registry {
                 &mut timings,
                 "sync_drain",
                 sync_drain::SyncDrainTool::new,
+            );
+            Self::insert_tool_timed(
+                &mut m,
+                &mut timings,
+                "read_file",
+                read_file::ReadFileTool::new,
+            );
+            Self::insert_tool_timed(
+                &mut m,
+                &mut timings,
+                "commit_lineage_search",
+                commit_lineage_search::CommitLineageSearchTool::new,
             );
             Self::insert_tool_timed(
                 &mut m,

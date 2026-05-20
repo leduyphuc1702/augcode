@@ -116,3 +116,7 @@ fn render_response(response: &jcode_codebase_retrieval::SearchResponse) -> Strin
     }
     out
 }
+
+#[cfg(test)]
+#[path = "codebase_search_tests.rs"]
+mod tests;
