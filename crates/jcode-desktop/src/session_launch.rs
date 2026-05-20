@@ -1,0 +1,673 @@
+use anyhow::{Context, Result};
+use serde_json::json;
+use std::io::BufReader;
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::time::Duration;
+
+const SERVER_START_TIMEOUT: Duration = Duration::from_secs(10);
+const SERVER_CONNECT_RETRY_DELAY: Duration = Duration::from_millis(50);
+
+mod events;
+mod server_io;
+mod terminal;
+
+use server_io::{
+    DrainOutcome, connect_server_with_retry, connect_server_with_retry_path, drain_session_events,
+    ensure_server_running, establish_session_id, read_history_reasoning_effort, read_model_catalog,
+    read_model_changed, read_reasoning_effort_changed, subscribe_and_establish_session,
+    subscribe_to_server, write_json_line,
+};
+use terminal::{compact_title, jcode_bin, launch_first_available_terminal, terminal_candidates};
+pub use terminal::{launch_validated_resume_session, validate_resume_session_id};
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DesktopModelChoice {
+    pub model: String,
+    pub provider: Option<String>,
+    pub api_method: Option<String>,
+    pub detail: Option<String>,
+    pub available: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DesktopSessionEvent {
+    Status(String),
+    SessionStarted {
+        session_id: String,
+    },
+    TextDelta(String),
+    TextReplace(String),
+    ToolStarted {
+        name: String,
+    },
+    ToolExecuting {
+        name: String,
+    },
+    ToolInput {
+        delta: String,
+    },
+    ToolFinished {
+        name: String,
+        summary: String,
+        is_error: bool,
+    },
+    ModelChanged {
+        model: String,
+        provider_name: Option<String>,
+        error: Option<String>,
+    },
+    ModelCatalog {
+        current_model: Option<String>,
+        provider_name: Option<String>,
+        models: Vec<DesktopModelChoice>,
+    },
+    ModelCatalogError {
+        error: String,
+    },
+    StdinRequest {
+        request_id: String,
+        prompt: String,
+        is_password: bool,
+        tool_call_id: String,
+    },
+    Reloading {
+        new_socket: Option<String>,
+    },
+    Reloaded {
+        session_id: String,
+    },
+    Done,
+    Error(String),
+}
+
+pub type DesktopSessionEventSender = Sender<DesktopSessionEvent>;
+
+#[derive(Clone, Debug)]
+pub struct DesktopSessionHandle {
+    command_tx: Sender<DesktopSessionCommand>,
+}
+
+impl DesktopSessionHandle {
+    pub fn cancel(&self) -> Result<()> {
+        self.command_tx
+            .send(DesktopSessionCommand::Cancel)
+            .context("failed to send cancel to desktop session worker")
+    }
+
+    pub fn send_stdin_response(&self, request_id: String, input: String) -> Result<()> {
+        self.command_tx
+            .send(DesktopSessionCommand::StdinResponse { request_id, input })
+            .context("failed to send stdin response to desktop session worker")
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum DesktopSessionCommand {
+    Cancel,
+    StdinResponse { request_id: String, input: String },
+}
+
+pub fn launch_resume_session(session_id: &str, title: &str) -> Result<()> {
+    let title = format!("jcode · {}", compact_title(title));
+    let candidates = terminal_candidates(&title, &["--resume", session_id]);
+    launch_first_available_terminal(candidates, &format!("jcode --resume {session_id}"))
+}
+
+pub fn launch_new_session() -> Result<()> {
+    let candidates = terminal_candidates("jcode · new session", &["--fresh-spawn"]);
+    launch_first_available_terminal(candidates, "jcode")
+}
+
+pub fn send_message_to_session(session_id: &str, _title: &str, message: &str) -> Result<()> {
+    validate_resume_session_id(session_id).context("refusing to send to invalid session id")?;
+    if message.trim().is_empty() {
+        anyhow::bail!("empty draft message");
+    }
+
+    Command::new(jcode_bin())
+        .arg("--resume")
+        .arg(session_id)
+        .arg("run")
+        .arg(message)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .with_context(|| format!("failed to spawn jcode run for {session_id}"))?;
+
+    Ok(())
+}
+
+pub fn spawn_fresh_server_session(
+    message: String,
+    images: Vec<(String, String)>,
+    event_tx: DesktopSessionEventSender,
+) -> Result<DesktopSessionHandle> {
+    if message.trim().is_empty() && images.is_empty() {
+        anyhow::bail!("empty draft message");
+    }
+
+    let (command_tx, command_rx) = mpsc::channel();
+    let handle = DesktopSessionHandle { command_tx };
+    std::thread::Builder::new()
+        .name("jcode-desktop-fresh-session".to_string())
+        .spawn(move || {
+            if let Err(error) =
+                run_server_session(None, &message, images, Some(event_tx.clone()), command_rx)
+            {
+                let _ = event_tx.send(DesktopSessionEvent::Error(format!("{error:#}")));
+            }
+        })
+        .context("failed to spawn desktop session worker")?;
+    Ok(handle)
+}
+
+pub fn spawn_message_to_session(
+    session_id: String,
+    message: String,
+    images: Vec<(String, String)>,
+    event_tx: DesktopSessionEventSender,
+) -> Result<DesktopSessionHandle> {
+    validate_resume_session_id(&session_id).context("refusing to send to invalid session id")?;
+    if message.trim().is_empty() && images.is_empty() {
+        anyhow::bail!("empty draft message");
+    }
+
+    let (command_tx, command_rx) = mpsc::channel();
+    let handle = DesktopSessionHandle { command_tx };
+    std::thread::Builder::new()
+        .name("jcode-desktop-session-message".to_string())
+        .spawn(move || {
+            if let Err(error) = run_server_session(
+                Some(&session_id),
+                &message,
+                images,
+                Some(event_tx.clone()),
+                command_rx,
+            ) {
+                let _ = event_tx.send(DesktopSessionEvent::Error(format!("{error:#}")));
+            }
+        })
+        .context("failed to spawn desktop session worker")?;
+    Ok(handle)
+}
+
+#[cfg(unix)]
+pub fn spawn_cycle_model(
+    direction: i8,
+    target_session_id: Option<String>,
+    event_tx: DesktopSessionEventSender,
+) -> Result<()> {
+    std::thread::Builder::new()
+        .name("jcode-desktop-cycle-model".to_string())
+        .spawn(move || {
+            if let Err(error) = cycle_model(
+                direction,
+                target_session_id.as_deref(),
+                Some(event_tx.clone()),
+            ) {
+                let _ = event_tx.send(DesktopSessionEvent::ModelCatalogError {
+                    error: format!("{error:#}"),
+                });
+            }
+        })
+        .context("failed to spawn desktop model switch worker")?;
+    Ok(())
+}
+
+#[cfg(unix)]
+pub fn spawn_cycle_reasoning_effort(
+    direction: i8,
+    target_session_id: Option<String>,
+    event_tx: DesktopSessionEventSender,
+) -> Result<()> {
+    std::thread::Builder::new()
+        .name("jcode-desktop-cycle-effort".to_string())
+        .spawn(move || {
+            if let Err(error) = cycle_reasoning_effort(
+                direction,
+                target_session_id.as_deref(),
+                Some(event_tx.clone()),
+            ) {
+                let _ = event_tx.send(DesktopSessionEvent::ModelCatalogError {
+                    error: format!("{error:#}"),
+                });
+            }
+        })
+        .context("failed to spawn desktop reasoning effort worker")?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub fn spawn_cycle_reasoning_effort(
+    _direction: i8,
+    _target_session_id: Option<String>,
+    event_tx: DesktopSessionEventSender,
+) -> Result<()> {
+    event_tx
+        .send(DesktopSessionEvent::ModelCatalogError {
+            error: "desktop reasoning effort switching is not implemented on this platform yet"
+                .to_string(),
+        })
+        .ok();
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub fn spawn_cycle_model(
+    _direction: i8,
+    _target_session_id: Option<String>,
+    event_tx: DesktopSessionEventSender,
+) -> Result<()> {
+    event_tx
+        .send(DesktopSessionEvent::ModelCatalogError {
+            error: "desktop model switching is not implemented on this platform yet".to_string(),
+        })
+        .ok();
+    Ok(())
+}
+
+#[cfg(unix)]
+pub fn spawn_load_model_catalog(
+    target_session_id: Option<String>,
+    event_tx: DesktopSessionEventSender,
+) -> Result<()> {
+    std::thread::Builder::new()
+        .name("jcode-desktop-load-model-catalog".to_string())
+        .spawn(move || {
+            if let Err(error) =
+                load_model_catalog(target_session_id.as_deref(), Some(event_tx.clone()))
+            {
+                let _ = event_tx.send(DesktopSessionEvent::ModelCatalogError {
+                    error: format!("{error:#}"),
+                });
+            }
+        })
+        .context("failed to spawn desktop model catalog worker")?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub fn spawn_load_model_catalog(
+    _target_session_id: Option<String>,
+    event_tx: DesktopSessionEventSender,
+) -> Result<()> {
+    event_tx
+        .send(DesktopSessionEvent::ModelCatalogError {
+            error: "desktop model catalog loading is not implemented on this platform yet"
+                .to_string(),
+        })
+        .ok();
+    Ok(())
+}
+
+#[cfg(unix)]
+pub fn spawn_set_model(
+    model: String,
+    target_session_id: Option<String>,
+    event_tx: DesktopSessionEventSender,
+) -> Result<()> {
+    std::thread::Builder::new()
+        .name("jcode-desktop-set-model".to_string())
+        .spawn(move || {
+            if let Err(error) =
+                set_model(&model, target_session_id.as_deref(), Some(event_tx.clone()))
+            {
+                let _ = event_tx.send(DesktopSessionEvent::ModelCatalogError {
+                    error: format!("{error:#}"),
+                });
+            }
+        })
+        .context("failed to spawn desktop set model worker")?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub fn spawn_set_model(
+    _model: String,
+    _target_session_id: Option<String>,
+    event_tx: DesktopSessionEventSender,
+) -> Result<()> {
+    event_tx
+        .send(DesktopSessionEvent::ModelCatalogError {
+            error: "desktop model switching is not implemented on this platform yet".to_string(),
+        })
+        .ok();
+    Ok(())
+}
+
+#[cfg(unix)]
+fn cycle_model(
+    direction: i8,
+    target_session_id: Option<&str>,
+    event_tx: Option<DesktopSessionEventSender>,
+) -> Result<()> {
+    send_desktop_status(&event_tx, "switching model");
+    ensure_server_running()?;
+    let stream = connect_server_with_retry(SERVER_START_TIMEOUT)?;
+    let mut writer = stream
+        .try_clone()
+        .context("failed to clone server socket writer")?;
+    let mut reader = BufReader::new(stream);
+    let mut next_request_id = 1_u64;
+    subscribe_and_establish_session(
+        &mut reader,
+        &mut writer,
+        &mut next_request_id,
+        target_session_id,
+        event_tx.as_ref(),
+    )?;
+    let request_id = next_request_id;
+    write_json_line(
+        &mut writer,
+        json!({
+            "type": "cycle_model",
+            "id": request_id,
+            "direction": direction,
+        }),
+    )?;
+    read_model_changed(
+        &mut reader,
+        SERVER_START_TIMEOUT,
+        event_tx.as_ref(),
+        request_id,
+    )
+}
+
+#[cfg(unix)]
+fn load_model_catalog(
+    target_session_id: Option<&str>,
+    event_tx: Option<DesktopSessionEventSender>,
+) -> Result<()> {
+    send_desktop_status(&event_tx, "loading models");
+    ensure_server_running()?;
+    let stream = connect_server_with_retry(SERVER_START_TIMEOUT)?;
+    let mut writer = stream
+        .try_clone()
+        .context("failed to clone server socket writer")?;
+    let mut reader = BufReader::new(stream);
+    let mut next_request_id = 1_u64;
+    subscribe_and_establish_session(
+        &mut reader,
+        &mut writer,
+        &mut next_request_id,
+        target_session_id,
+        event_tx.as_ref(),
+    )?;
+    let request_id = next_request_id;
+    write_json_line(
+        &mut writer,
+        json!({
+            "type": "get_model_catalog",
+            "id": request_id,
+        }),
+    )?;
+    read_model_catalog(
+        &mut reader,
+        SERVER_START_TIMEOUT,
+        event_tx.as_ref(),
+        request_id,
+    )
+}
+
+#[cfg(unix)]
+fn set_model(
+    model: &str,
+    target_session_id: Option<&str>,
+    event_tx: Option<DesktopSessionEventSender>,
+) -> Result<()> {
+    send_desktop_status(&event_tx, "switching model");
+    ensure_server_running()?;
+    let stream = connect_server_with_retry(SERVER_START_TIMEOUT)?;
+    let mut writer = stream
+        .try_clone()
+        .context("failed to clone server socket writer")?;
+    let mut reader = BufReader::new(stream);
+    let mut next_request_id = 1_u64;
+    subscribe_and_establish_session(
+        &mut reader,
+        &mut writer,
+        &mut next_request_id,
+        target_session_id,
+        event_tx.as_ref(),
+    )?;
+    let request_id = next_request_id;
+    write_json_line(
+        &mut writer,
+        json!({
+            "type": "set_model",
+            "id": request_id,
+            "model": model,
+        }),
+    )?;
+    read_model_changed(
+        &mut reader,
+        SERVER_START_TIMEOUT,
+        event_tx.as_ref(),
+        request_id,
+    )
+}
+
+#[cfg(unix)]
+fn cycle_reasoning_effort(
+    direction: i8,
+    target_session_id: Option<&str>,
+    event_tx: Option<DesktopSessionEventSender>,
+) -> Result<()> {
+    const EFFORTS: [&str; 5] = ["none", "low", "medium", "high", "xhigh"];
+
+    send_desktop_status(&event_tx, "switching reasoning effort");
+    ensure_server_running()?;
+    let stream = connect_server_with_retry(SERVER_START_TIMEOUT)?;
+    let mut writer = stream
+        .try_clone()
+        .context("failed to clone server socket writer")?;
+    let mut reader = BufReader::new(stream);
+    let mut next_request_id = 1_u64;
+    subscribe_and_establish_session(
+        &mut reader,
+        &mut writer,
+        &mut next_request_id,
+        target_session_id,
+        event_tx.as_ref(),
+    )?;
+
+    let history_request_id = next_request_id;
+    write_json_line(
+        &mut writer,
+        json!({
+            "type": "get_history",
+            "id": history_request_id,
+        }),
+    )?;
+    next_request_id += 1;
+    let current = read_history_reasoning_effort(
+        &mut reader,
+        SERVER_START_TIMEOUT,
+        event_tx.as_ref(),
+        history_request_id,
+    )?;
+    let current_index = current
+        .as_deref()
+        .and_then(|effort| EFFORTS.iter().position(|candidate| *candidate == effort))
+        .unwrap_or(EFFORTS.len() - 1);
+    let next_index = if direction > 0 {
+        (current_index + 1).min(EFFORTS.len() - 1)
+    } else {
+        current_index.saturating_sub(1)
+    };
+    let next_effort = EFFORTS[next_index];
+
+    let request_id = next_request_id;
+    write_json_line(
+        &mut writer,
+        json!({
+            "type": "set_reasoning_effort",
+            "id": request_id,
+            "effort": next_effort,
+        }),
+    )?;
+    read_reasoning_effort_changed(
+        &mut reader,
+        SERVER_START_TIMEOUT,
+        event_tx.as_ref(),
+        request_id,
+    )
+}
+
+#[cfg(unix)]
+fn run_server_session(
+    target_session_id: Option<&str>,
+    message: &str,
+    images: Vec<(String, String)>,
+    event_tx: Option<DesktopSessionEventSender>,
+    command_rx: Receiver<DesktopSessionCommand>,
+) -> Result<String> {
+    send_desktop_status(&event_tx, "starting shared server");
+    ensure_server_running()?;
+    send_desktop_status(&event_tx, "connecting to shared server");
+    let stream = connect_server_with_retry(SERVER_START_TIMEOUT)?;
+    let mut writer = stream
+        .try_clone()
+        .context("failed to clone server socket writer")?;
+    let mut reader = BufReader::new(stream);
+    let mut next_request_id = 1_u64;
+
+    let subscribe_request_id = next_request_id;
+    subscribe_to_server(&mut writer, subscribe_request_id, target_session_id)?;
+    next_request_id += 1;
+
+    let session_id = establish_session_id(
+        &mut reader,
+        &mut writer,
+        &mut next_request_id,
+        subscribe_request_id,
+        event_tx.as_ref(),
+    )?;
+    send_desktop_event(
+        &event_tx,
+        DesktopSessionEvent::SessionStarted {
+            session_id: session_id.clone(),
+        },
+    );
+
+    send_desktop_status(&event_tx, "sending message");
+    let message_request_id = next_request_id;
+    write_json_line(
+        &mut writer,
+        json!({
+            "type": "message",
+            "id": message_request_id,
+            "content": message,
+            "images": images,
+        }),
+    )?;
+    next_request_id += 1;
+
+    let mut current_socket_path = socket_path();
+    loop {
+        match drain_session_events(
+            reader,
+            &mut writer,
+            &mut next_request_id,
+            event_tx.as_ref(),
+            &command_rx,
+            message_request_id,
+        )? {
+            DrainOutcome::Terminal => break,
+            DrainOutcome::Disconnected => {
+                send_desktop_status(&event_tx, "server disconnected, reconnecting");
+            }
+            DrainOutcome::Reloading { new_socket } => {
+                if let Some(path) = new_socket {
+                    current_socket_path = PathBuf::from(path);
+                }
+                send_desktop_status(&event_tx, "server reloading, reconnecting");
+            }
+        }
+
+        let stream = connect_server_with_retry_path(&current_socket_path, SERVER_START_TIMEOUT)?;
+        writer = stream
+            .try_clone()
+            .context("failed to clone reconnected server socket writer")?;
+        reader = BufReader::new(stream);
+        let subscribe_request_id = next_request_id;
+        subscribe_to_server(&mut writer, subscribe_request_id, Some(&session_id))?;
+        next_request_id += 1;
+        let reconnected_session_id = establish_session_id(
+            &mut reader,
+            &mut writer,
+            &mut next_request_id,
+            subscribe_request_id,
+            event_tx.as_ref(),
+        )?;
+        send_desktop_event(
+            &event_tx,
+            DesktopSessionEvent::Reloaded {
+                session_id: reconnected_session_id,
+            },
+        );
+    }
+    Ok(session_id)
+}
+
+#[cfg(not(unix))]
+fn run_server_session(
+    _target_session_id: Option<&str>,
+    _message: &str,
+    _images: Vec<(String, String)>,
+    _event_tx: Option<DesktopSessionEventSender>,
+    _command_rx: Receiver<DesktopSessionCommand>,
+) -> Result<String> {
+    anyhow::bail!("desktop server sessions are not implemented on this platform yet")
+}
+
+#[cfg(unix)]
+fn send_desktop_status(event_tx: &Option<DesktopSessionEventSender>, status: &str) {
+    send_desktop_event(event_tx, DesktopSessionEvent::Status(status.to_string()));
+}
+
+fn send_desktop_event(event_tx: &Option<DesktopSessionEventSender>, event: DesktopSessionEvent) {
+    send_desktop_event_ref(event_tx.as_ref(), event);
+}
+
+pub(super) fn send_desktop_event_ref(
+    event_tx: Option<&DesktopSessionEventSender>,
+    event: DesktopSessionEvent,
+) {
+    if let Some(event_tx) = event_tx {
+        let _ = event_tx.send(event);
+    }
+}
+
+pub(super) fn socket_path() -> PathBuf {
+    if let Ok(custom) = std::env::var("JCODE_SOCKET") {
+        return PathBuf::from(custom);
+    }
+    if let Ok(dir) = std::env::var("JCODE_RUNTIME_DIR") {
+        return PathBuf::from(dir).join("jcode.sock");
+    }
+    if let Ok(dir) = std::env::var("XDG_RUNTIME_DIR") {
+        return PathBuf::from(dir).join("jcode.sock");
+    }
+    std::env::temp_dir()
+        .join(format!("jcode-{}", runtime_user_discriminator()))
+        .join("jcode.sock")
+}
+
+#[cfg(unix)]
+fn runtime_user_discriminator() -> String {
+    unsafe { libc::geteuid() }.to_string()
+}
+
+#[cfg(not(unix))]
+fn runtime_user_discriminator() -> String {
+    std::env::var("USERNAME")
+        .or_else(|_| std::env::var("USER"))
+        .unwrap_or_else(|_| "user".to_string())
+}
+
+#[cfg(test)]
+mod tests;
