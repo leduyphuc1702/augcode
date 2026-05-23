@@ -148,8 +148,8 @@ message_timestamps = true
 codebase_sync = true
 # Per-agent, per-task skill routing. Off by default while the MVP bakes.
 per_agent_skill_router = false
-# Session-per-agent workflow. Off by default.
-agent_workflow = false
+# Session-per-agent workflow. On by default; set false to keep legacy single-agent turns.
+agent_workflow = true
 # Update channel: "stable" (releases only) or "main" (latest commits on push)
 # Set to "main" for bleeding edge updates every time code is pushed
 update_channel = "stable"

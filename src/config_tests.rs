@@ -43,9 +43,9 @@ fn per_agent_skill_router_defaults_off() {
 }
 
 #[test]
-fn agent_workflow_defaults_match_opt_in_policy() {
+fn agent_workflow_defaults_enabled() {
     let cfg = Config::default();
-    assert!(!cfg.features.agent_workflow);
+    assert!(cfg.features.agent_workflow);
     assert!(cfg.skills.allow_custom_local);
     assert_eq!(cfg.skills.remote_read_policy, "approve");
     assert_eq!(cfg.workflow.orchestrator_context_soft_pct, 0.80);
@@ -90,6 +90,10 @@ fn test_generated_default_config_uses_low_openai_reasoning_effort() {
     assert!(
         content.contains("openai_service_tier = \"priority\""),
         "generated default config should enable OpenAI fast mode"
+    );
+    assert!(
+        content.contains("agent_workflow = true"),
+        "generated default config should enable agent workflow"
     );
 
     if let Some(prev) = prev_home {

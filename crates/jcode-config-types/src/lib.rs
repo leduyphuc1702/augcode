@@ -601,7 +601,7 @@ pub struct FeatureConfig {
     pub codebase_sync: bool,
     /// Enable per-agent/per-task skill routing (default: false)
     pub per_agent_skill_router: bool,
-    /// Enable the opt-in session-per-agent workflow (default: false)
+    /// Enable the session-per-agent workflow (default: true)
     pub agent_workflow: bool,
     /// Update channel: "stable" (releases only) or "main" (latest commits)
     pub update_channel: UpdateChannel,
@@ -615,7 +615,7 @@ impl Default for FeatureConfig {
             message_timestamps: true,
             codebase_sync: true,
             per_agent_skill_router: false,
-            agent_workflow: false,
+            agent_workflow: true,
             update_channel: UpdateChannel::default(),
         }
     }
