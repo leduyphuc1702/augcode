@@ -601,6 +601,8 @@ pub struct FeatureConfig {
     pub codebase_sync: bool,
     /// Enable per-agent/per-task skill routing (default: false)
     pub per_agent_skill_router: bool,
+    /// Enable the opt-in session-per-agent workflow (default: false)
+    pub agent_workflow: bool,
     /// Update channel: "stable" (releases only) or "main" (latest commits)
     pub update_channel: UpdateChannel,
 }
@@ -613,7 +615,49 @@ impl Default for FeatureConfig {
             message_timestamps: true,
             codebase_sync: true,
             per_agent_skill_router: false,
+            agent_workflow: false,
             update_channel: UpdateChannel::default(),
+        }
+    }
+}
+
+/// Skill routing policy knobs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SkillsConfig {
+    /// Allow user/workspace copied custom skills under agent-skills/<role>.
+    pub allow_custom_local: bool,
+    /// Remote skill body policy. MVP supports "approve".
+    pub remote_read_policy: String,
+    /// Minimum marketplace tier for implicit routing.
+    pub marketplace_min_tier: String,
+}
+
+impl Default for SkillsConfig {
+    fn default() -> Self {
+        Self {
+            allow_custom_local: true,
+            remote_read_policy: "approve".to_string(),
+            marketplace_min_tier: "A".to_string(),
+        }
+    }
+}
+
+/// Agent workflow policy knobs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WorkflowConfig {
+    /// Start background compaction around this fraction of context usage.
+    pub orchestrator_context_soft_pct: f32,
+    /// Hard compact/block around this fraction of context usage.
+    pub orchestrator_context_hard_pct: f32,
+}
+
+impl Default for WorkflowConfig {
+    fn default() -> Self {
+        Self {
+            orchestrator_context_soft_pct: 0.80,
+            orchestrator_context_hard_pct: 0.95,
         }
     }
 }

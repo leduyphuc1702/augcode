@@ -34,6 +34,10 @@ impl App {
             "subagent" => {
                 "`/subagent <prompt>`\nLaunch a subagent immediately.\n\nOptional flags:\n- `--type <kind>` sets the subagent type (default `general`)\n- `--model <name>` overrides the subagent model for this run\n- `--continue <session_id>` resumes an existing subagent session"
             }
+            "approve-plan" | "reject-plan" | "approve-review" | "reject-review"
+            | "approve-skill" => {
+                "`/approve-plan`\nUnlock workflow implementation agents after reviewing the final plan.\n\n`/reject-plan [reason]`\nReject the plan and return to planning.\n\n`/approve-review`\nMark workflow review accepted and complete.\n\n`/reject-review [reason]`\nReject the review and unlock implementation fixes.\n\n`/approve-skill <skills.sh id-or-url>`\nAllow one approved remote skills.sh body read for this workflow."
+            }
             "observe" => {
                 "`/observe`\nToggle transient observe mode for the side panel.\n\n`/observe on`\nEnable observe mode and focus the observe page.\n\n`/observe off`\nDisable observe mode.\n\n`/observe status`\nShow whether observe mode is enabled.\n\nObserve mode shows only the latest tool call or tool result added to context, and it is not persisted to disk."
             }

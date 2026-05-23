@@ -7,6 +7,7 @@
 )]
 
 pub mod agent;
+pub mod agent_workflow;
 pub mod ambient;
 pub mod ambient_runner;
 pub mod ambient_scheduler;

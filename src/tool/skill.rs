@@ -35,6 +35,9 @@ struct SkillInput {
     /// Optional task intent/path hint used by the router when validating scoped skills.
     #[serde(default)]
     intent: Option<String>,
+    /// Remote skills.sh id or URL for remote_preview/remote_read.
+    #[serde(default)]
+    url: Option<String>,
 }
 
 fn default_action() -> String {
@@ -58,12 +61,16 @@ impl Tool for SkillTool {
                 "intent": super::intent_schema_property(),
                 "action": {
                     "type": "string",
-                    "enum": ["load", "list", "reload", "reload_all", "read"],
+                    "enum": ["load", "list", "reload", "reload_all", "read", "verify", "remote_preview", "remote_read"],
                     "description": "Action."
                 },
                 "name": {
                     "type": "string",
                     "description": "Skill name."
+                },
+                "url": {
+                    "type": "string",
+                    "description": "skills.sh skill id or URL."
                 }
             }
         })
@@ -83,23 +90,28 @@ impl Tool for SkillTool {
                     ctx.working_dir.as_deref(),
                     ctx.allowed_tools.as_ref(),
                     intent.as_deref(),
+                    ctx.agent_role.as_deref(),
                 )
                 .await
             }
             "list" => self.list_skills().await,
             "reload" => self.reload_skill(params.name).await,
             "reload_all" => self.reload_all_skills(ctx.working_dir.as_deref()).await,
+            "verify" => self.verify_skills(ctx.agent_role.as_deref()).await,
+            "remote_preview" => self.remote_preview(params.url.or(params.name)).await,
+            "remote_read" => self.remote_read(params.url.or(params.name), &ctx.session_id).await,
             "read" => {
                 self.read_skill(
                     params.name,
                     ctx.working_dir.as_deref(),
                     ctx.allowed_tools.as_ref(),
                     intent.as_deref(),
+                    ctx.agent_role.as_deref(),
                 )
                 .await
             }
             _ => Ok(ToolOutput::new(format!(
-                "Unknown action: {}. Use 'load', 'list', 'reload', 'reload_all', or 'read'.",
+                "Unknown action: {}. Use 'load', 'list', 'reload', 'reload_all', 'read', 'verify', 'remote_preview', or 'remote_read'.",
                 params.action
             ))),
         }
@@ -120,12 +132,20 @@ impl SkillTool {
         working_dir: Option<&std::path::Path>,
         allowed_tools: Option<&std::collections::HashSet<String>>,
         intent: Option<&str>,
+        agent_role: Option<&str>,
     ) -> Result<ToolOutput> {
         let name = normalize_skill_name(name, "load")?;
 
         let registry = self.registry.read().await;
         let skill = resolve_skill(&registry, &name)?;
-        validate_router_access(skill, working_dir, allowed_tools, intent, "load")?;
+        validate_router_access(
+            skill,
+            working_dir,
+            allowed_tools,
+            intent,
+            agent_role,
+            "load",
+        )?;
 
         let base_dir = skill
             .path
@@ -258,13 +278,21 @@ impl SkillTool {
         working_dir: Option<&std::path::Path>,
         allowed_tools: Option<&std::collections::HashSet<String>>,
         intent: Option<&str>,
+        agent_role: Option<&str>,
     ) -> Result<ToolOutput> {
         let name = normalize_skill_name(name, "read")?;
 
         let registry = self.registry.read().await;
 
         if let SkillLookup::Found(skill) = registry.lookup(&name) {
-            validate_router_access(skill, working_dir, allowed_tools, intent, "read")?;
+            validate_router_access(
+                skill,
+                working_dir,
+                allowed_tools,
+                intent,
+                agent_role,
+                "read",
+            )?;
             let mut output = format!("# Skill: {}\n\n", skill.name);
             output.push_str(&format!("**ID:** {}\n", skill.id));
             output.push_str(&format!("**Description:** {}\n", skill.description));
@@ -291,6 +319,79 @@ impl SkillTool {
             .with_title("Skills: Not found"))
         }
     }
+
+    async fn verify_skills(&self, agent_role: Option<&str>) -> Result<ToolOutput> {
+        let registry = self.registry.read().await;
+        let role = agent_role.unwrap_or(crate::agent_workflow::ROLE_IMPLEMENTER);
+        let mut output = format!("Skill verification for role `{role}`:\n\n");
+        for skill in registry.list() {
+            let role_allowed = skill.manifest.allowed_agents.is_empty()
+                || skill
+                    .manifest
+                    .allowed_agents
+                    .iter()
+                    .any(|allowed| allowed == role);
+            let skills_sh = skill
+                .manifest
+                .skills_sh_id
+                .as_deref()
+                .or(skill.manifest.skills_sh_url.as_deref())
+                .unwrap_or("<none>");
+            output.push_str(&format!(
+                "- /{} id={} source={} skills_sh={} role_allowed={} invocation={}\n",
+                skill.name,
+                skill.id,
+                skill.manifest.source_kind,
+                skills_sh,
+                role_allowed,
+                skill.manifest.invocation_mode
+            ));
+        }
+        Ok(ToolOutput::new(output).with_title("Skills: Verify"))
+    }
+
+    async fn remote_preview(&self, skill_ref: Option<String>) -> Result<ToolOutput> {
+        let skill_ref = normalize_remote_skill_ref(skill_ref)?;
+        ensure_skills_sh_ref(&skill_ref)?;
+        let text = fetch_remote_skill(&skill_ref, 8_000).await?;
+        let preview = crate::util::truncate_str(&text, 2_000);
+        Ok(ToolOutput::new(format!(
+            "Remote skill preview: {}\n\n{}\n\nUse `/approve-skill {}` before `remote_read`.",
+            skill_ref, preview, skill_ref
+        ))
+        .with_title("Skills: Remote preview"))
+    }
+
+    async fn remote_read(&self, skill_ref: Option<String>, session_id: &str) -> Result<ToolOutput> {
+        let skill_ref = normalize_remote_skill_ref(skill_ref)?;
+        ensure_skills_sh_ref(&skill_ref)?;
+        let session = crate::session::Session::load(session_id)?;
+        let approved = session
+            .agent_workflow_state
+            .as_ref()
+            .map(|state| state.has_remote_skill_grant(&skill_ref))
+            .unwrap_or(false)
+            || session
+                .parent_id
+                .as_deref()
+                .and_then(|parent_id| crate::session::Session::load(parent_id).ok())
+                .and_then(|parent| parent.agent_workflow_state)
+                .map(|state| state.has_remote_skill_grant(&skill_ref))
+                .unwrap_or(false);
+        if crate::config::config().skills.remote_read_policy == "approve" && !approved {
+            anyhow::bail!(
+                "Remote skill '{}' requires approval. Run /approve-skill {} first.",
+                skill_ref,
+                skill_ref
+            );
+        }
+        let text = fetch_remote_skill(&skill_ref, 64_000).await?;
+        Ok(ToolOutput::new(format!(
+            "# Remote Skill (untrusted)\n\nSource: {}\n\n{}",
+            skill_ref, text
+        ))
+        .with_title("Skills: Remote read"))
+    }
 }
 
 fn validate_router_access(
@@ -298,6 +399,7 @@ fn validate_router_access(
     working_dir: Option<&std::path::Path>,
     allowed_tools: Option<&std::collections::HashSet<String>>,
     intent: Option<&str>,
+    agent_role: Option<&str>,
     action: &str,
 ) -> Result<()> {
     if !crate::skill_router::enabled() {
@@ -305,7 +407,7 @@ fn validate_router_access(
     }
     let agent = crate::skill_router::AgentProfile::from_allowed_tools(
         "skill_manage",
-        "implementer",
+        agent_role.unwrap_or(crate::agent_workflow::ROLE_IMPLEMENTER),
         allowed_tools,
     );
     crate::skill_router::validate_explicit_load_for_intent(
@@ -322,6 +424,49 @@ fn validate_router_access(
             reason
         )
     })
+}
+
+fn normalize_remote_skill_ref(skill_ref: Option<String>) -> Result<String> {
+    let skill_ref =
+        skill_ref.ok_or_else(|| anyhow::anyhow!("'url' or 'name' is required for remote skill"))?;
+    let skill_ref = skill_ref.trim();
+    if skill_ref.is_empty() {
+        anyhow::bail!("remote skill ref cannot be empty");
+    }
+    Ok(crate::agent_workflow::normalize_remote_skill_ref_for_grant(
+        skill_ref,
+    ))
+}
+
+fn ensure_skills_sh_ref(skill_ref: &str) -> Result<()> {
+    if skill_ref.starts_with("https://www.skills.sh/")
+        || skill_ref.starts_with("https://skills.sh/")
+        || (!skill_ref.starts_with("http://") && !skill_ref.starts_with("https://"))
+    {
+        return Ok(());
+    }
+    anyhow::bail!("remote skill refs must be skills.sh ids or https://skills.sh URLs")
+}
+
+async fn fetch_remote_skill(skill_ref: &str, max_bytes: usize) -> Result<String> {
+    let url = if skill_ref.starts_with("http://") || skill_ref.starts_with("https://") {
+        skill_ref.to_string()
+    } else {
+        format!(
+            "https://www.skills.sh/{}",
+            skill_ref.trim_start_matches('/')
+        )
+    };
+    let response = crate::provider::shared_http_client()
+        .get(&url)
+        .header(reqwest::header::USER_AGENT, "jcode-skill-router")
+        .send()
+        .await?;
+    if !response.status().is_success() {
+        anyhow::bail!("remote skill fetch failed: HTTP {}", response.status());
+    }
+    let text = response.text().await?;
+    Ok(crate::util::truncate_str(&text, max_bytes).to_string())
 }
 
 fn resolve_skill<'a>(registry: &'a SkillRegistry, name: &str) -> Result<&'a crate::skill::Skill> {
@@ -483,6 +628,31 @@ mod tests {
         (tool, temp_dir)
     }
 
+    fn create_test_tool_with_role_custom_skill(
+        role: &str,
+        name: &str,
+    ) -> (SkillTool, tempfile::TempDir) {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let skill_dir = temp_dir
+            .path()
+            .join(".jcode")
+            .join("agent-skills")
+            .join(role)
+            .join(name);
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            format!(
+                "---\nname: {name}\ndescription: Use this skill for React button UI implementation\n---\n\n# UI Skill\n\nUse this test skill."
+            ),
+        )
+        .unwrap();
+
+        let registry = SkillRegistry::load_for_working_dir(Some(temp_dir.path())).unwrap();
+        let tool = SkillTool::new(Arc::new(RwLock::new(registry)));
+        (tool, temp_dir)
+    }
+
     fn create_test_context() -> ToolContext {
         ToolContext {
             session_id: "test-session".to_string(),
@@ -490,6 +660,7 @@ mod tests {
             tool_call_id: "test-tool-call".to_string(),
             working_dir: None,
             allowed_tools: None,
+            agent_role: None,
             stdin_request_tx: None,
             graceful_shutdown_signal: None,
             execution_mode: crate::tool::ToolExecutionMode::Direct,
@@ -648,6 +819,86 @@ mod tests {
             .unwrap();
 
         assert!(allowed.output.contains("# Skill: react-component"));
+    }
+
+    #[tokio::test]
+    async fn workflow_custom_role_skill_routes_only_to_matching_role() {
+        let _lock = crate::storage::lock_test_env();
+        let _env = EnvVarGuard::set("JCODE_AGENT_WORKFLOW_ENABLED", "true");
+        let (tool, temp_dir) =
+            create_test_tool_with_role_custom_skill("frontend-agent", "ui-role-skill");
+        let manifests = {
+            let registry = tool.registry.read().await;
+            let skill = registry.get("ui-role-skill").unwrap();
+            assert_eq!(
+                skill.manifest.source_kind,
+                crate::skill_router::SOURCE_CUSTOM_LOCAL
+            );
+            assert!(
+                skill
+                    .manifest
+                    .allowed_agents
+                    .contains(&"frontend-agent".to_string())
+            );
+            registry.manifests()
+        };
+
+        let frontend = crate::skill_router::AgentProfile::from_allowed_tools(
+            "frontend",
+            "frontend-agent",
+            None,
+        );
+        let backend =
+            crate::skill_router::AgentProfile::from_allowed_tools("backend", "backend-agent", None);
+
+        let routed = crate::skill_router::route_for_prompt(
+            &manifests,
+            "/ui-role-skill build a React button",
+            Some(temp_dir.path()),
+            &frontend,
+            "task-ui",
+        );
+        assert!(
+            routed
+                .selected_skills
+                .iter()
+                .any(|skill| skill.name == "ui-role-skill")
+        );
+
+        let blocked = crate::skill_router::route_for_prompt(
+            &manifests,
+            "/ui-role-skill build a React button",
+            Some(temp_dir.path()),
+            &backend,
+            "task-api",
+        );
+        assert!(
+            blocked
+                .blocked_skills
+                .iter()
+                .any(|rejection| rejection.reason == "agent-not-allowed")
+        );
+    }
+
+    #[tokio::test]
+    async fn workflow_remote_read_requires_approval_before_fetch() {
+        let _lock = crate::storage::lock_test_env();
+        let temp_home = tempfile::tempdir().unwrap();
+        let _home = EnvVarGuard::set("JCODE_HOME", temp_home.path().to_str().unwrap());
+        let mut session =
+            crate::session::Session::create_with_id("remote_read_workflow".to_string(), None, None);
+        session.save().unwrap();
+
+        let tool = create_test_tool();
+        let mut ctx = create_test_context();
+        ctx.session_id = "remote_read_workflow".to_string();
+        let result = tool
+            .execute(json!({"action": "remote_read", "name": "ui-ux-pro"}), ctx)
+            .await;
+
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("requires approval"));
+        assert!(error.contains("/approve-skill ui-ux-pro"));
     }
 
     #[tokio::test]

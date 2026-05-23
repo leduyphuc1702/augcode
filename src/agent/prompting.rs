@@ -116,6 +116,23 @@ impl Agent {
             working_dir.as_deref(),
         );
 
+        if crate::agent_workflow::enabled() {
+            let role = crate::agent_workflow::effective_role(&self.session);
+            if !split.dynamic_part.is_empty() {
+                split.dynamic_part.push_str("\n\n");
+            }
+            split.dynamic_part.push_str("# Agent Workflow\n\n");
+            split.dynamic_part.push_str(&format!(
+                "Current agent role: `{}`. Keep orchestration artifacts compact. Do not paste full child transcripts or long logs into the parent session.",
+                role
+            ));
+            if role == crate::agent_workflow::ROLE_ORCHESTRATOR {
+                split.dynamic_part.push_str(
+                    "\nUse planning/review/finalizer subagents before implementation. Stop for `/approve-plan` before spawning implementation agents and stop for `/approve-review` after code review.",
+                );
+            }
+        }
+
         let route_messages = self
             .session
             .messages
@@ -126,9 +143,10 @@ impl Agent {
             && let Some(prompt_text) = crate::skill_router::latest_user_text(&route_messages)
         {
             let manifests = skills.manifests();
+            let role = crate::agent_workflow::effective_role(&self.session);
             let agent = crate::skill_router::AgentProfile::from_allowed_tools(
                 self.session.id.clone(),
-                "implementer",
+                role,
                 self.allowed_tools.as_ref(),
             );
             let routing = crate::skill_router::route_for_prompt(

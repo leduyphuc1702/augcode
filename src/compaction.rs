@@ -766,6 +766,26 @@ impl CompactionManager {
         self.effective_token_count() as f32 / self.token_budget as f32
     }
 
+    fn soft_threshold(&self) -> f32 {
+        if crate::agent_workflow::enabled() {
+            crate::config::config()
+                .workflow
+                .orchestrator_context_soft_pct
+        } else {
+            COMPACTION_THRESHOLD
+        }
+    }
+
+    fn hard_threshold(&self) -> f32 {
+        if crate::agent_workflow::enabled() {
+            crate::config::config()
+                .workflow
+                .orchestrator_context_hard_pct
+        } else {
+            CRITICAL_THRESHOLD
+        }
+    }
+
     /// Check if we should start compaction
     pub fn should_compact_with(&self, all_messages: &[Message]) -> bool {
         use crate::config::CompactionMode;
@@ -776,7 +796,7 @@ impl CompactionManager {
         match self.mode {
             CompactionMode::Reactive => {
                 self.pending_task.is_none()
-                    && self.context_usage_with(all_messages) >= COMPACTION_THRESHOLD
+                    && self.context_usage_with(all_messages) >= self.soft_threshold()
                     && active.len() > RECENT_TURNS_TO_KEEP
             }
             CompactionMode::Proactive => {
@@ -871,11 +891,12 @@ impl CompactionManager {
         let bg_started = !was_compacting && self.is_compacting();
 
         let usage = self.context_usage_with(all_messages);
-        if usage >= CRITICAL_THRESHOLD {
+        let hard_threshold = self.hard_threshold();
+        if usage >= hard_threshold {
             crate::logging::warn(&format!(
                 "[compaction] Context at {:.1}% (critical threshold {:.0}%) — performing synchronous hard compact",
                 usage * 100.0,
-                CRITICAL_THRESHOLD * 100.0,
+                hard_threshold * 100.0,
             ));
             match self.hard_compact_with(all_messages) {
                 Ok(dropped) => {

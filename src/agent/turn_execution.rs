@@ -286,6 +286,15 @@ impl Agent {
         }
 
         let mut tools = self.registry.definitions(self.allowed_tools.as_ref()).await;
+        if crate::agent_workflow::enabled() {
+            let role = crate::agent_workflow::effective_role(&self.session);
+            let all_names = tools
+                .iter()
+                .map(|tool| tool.name.clone())
+                .collect::<Vec<_>>();
+            let allowed = crate::agent_workflow::role_allowed_tools(&role, &all_names);
+            tools.retain(|tool| allowed.contains(&tool.name));
+        }
         if !self.session.is_canary {
             tools.retain(|tool| tool.name != "selfdev");
         }
@@ -310,6 +319,15 @@ impl Agent {
             self.registry.register_selfdev_tools().await;
         }
         let mut tools = self.registry.definitions(self.allowed_tools.as_ref()).await;
+        if crate::agent_workflow::enabled() {
+            let role = crate::agent_workflow::effective_role(&self.session);
+            let all_names = tools
+                .iter()
+                .map(|tool| tool.name.clone())
+                .collect::<Vec<_>>();
+            let allowed = crate::agent_workflow::role_allowed_tools(&role, &all_names);
+            tools.retain(|tool| allowed.contains(&tool.name));
+        }
         if !self.session.is_canary {
             tools.retain(|tool| tool.name != "selfdev");
         }
@@ -333,6 +351,7 @@ impl Agent {
             tool_call_id: call_id,
             working_dir: self.working_dir().map(PathBuf::from),
             allowed_tools: self.allowed_tools.clone(),
+            agent_role: self.session.agent_role.clone(),
             stdin_request_tx: self.stdin_request_tx.clone(),
             graceful_shutdown_signal: Some(self.graceful_shutdown.clone()),
             execution_mode: ToolExecutionMode::Direct,
@@ -390,6 +409,51 @@ impl Agent {
     }
 
     pub(super) fn validate_tool_allowed(&self, name: &str) -> Result<()> {
+        if crate::agent_workflow::enabled() {
+            let role = crate::agent_workflow::effective_role(&self.session);
+            if let Some(locked) = self.locked_tools.as_ref()
+                && !locked.iter().any(|tool| tool.name == name)
+            {
+                return Err(anyhow::anyhow!(
+                    "Tool '{}' is blocked for workflow role '{}'",
+                    name,
+                    role
+                ));
+            }
+            if crate::agent_workflow::non_implementer_blocked_tools().contains(&name)
+                && matches!(
+                    role.as_str(),
+                    crate::agent_workflow::ROLE_ORCHESTRATOR
+                        | crate::agent_workflow::ROLE_PLAN_AGENT
+                        | crate::agent_workflow::ROLE_PLAN_REVIEWER
+                        | crate::agent_workflow::ROLE_PLAN_FINALIZER
+                )
+            {
+                return Err(anyhow::anyhow!(
+                    "Tool '{}' is blocked for workflow role '{}'",
+                    name,
+                    role
+                ));
+            }
+            if crate::agent_workflow::edit_tools().contains(&name)
+                && role == crate::agent_workflow::ROLE_CODE_REVIEWER
+            {
+                return Err(anyhow::anyhow!(
+                    "Tool '{}' is blocked for workflow role '{}'",
+                    name,
+                    role
+                ));
+            }
+            if crate::agent_workflow::edit_tools().contains(&name)
+                && matches!(
+                    role.as_str(),
+                    crate::agent_workflow::ROLE_FRONTEND | crate::agent_workflow::ROLE_BACKEND
+                )
+            {
+                crate::agent_workflow::workflow_allows_implementation_mutation(&self.session)
+                    .map_err(anyhow::Error::msg)?;
+            }
+        }
         if let Some(allowed) = self.allowed_tools.as_ref()
             && !allowed.contains(name)
         {

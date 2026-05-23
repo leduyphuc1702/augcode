@@ -148,9 +148,24 @@ message_timestamps = true
 codebase_sync = true
 # Per-agent, per-task skill routing. Off by default while the MVP bakes.
 per_agent_skill_router = false
+# Session-per-agent workflow. Off by default.
+agent_workflow = false
 # Update channel: "stable" (releases only) or "main" (latest commits on push)
 # Set to "main" for bleeding edge updates every time code is pushed
 update_channel = "stable"
+
+[skills]
+# Allow local custom skills copied into .jcode/agent-skills/<role>/<skill>/SKILL.md.
+allow_custom_local = true
+# Full remote skill bodies require approval in workflow mode.
+remote_read_policy = "approve"
+# Minimum marketplace tier for implicit routing when skills.sh metadata is present.
+marketplace_min_tier = "A"
+
+[workflow]
+# Context guard thresholds for orchestrator/workflow sessions.
+orchestrator_context_soft_pct = 0.80
+orchestrator_context_hard_pct = 0.95
 
 [websearch]
 # Preferred websearch engine: "duckduckgo" or "bing".

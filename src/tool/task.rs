@@ -54,6 +54,8 @@ struct SubagentInput {
     #[serde(default)]
     session_id: Option<String>,
     #[serde(default)]
+    workflow_task_id: Option<String>,
+    #[serde(default)]
     output_mode: SubagentOutputMode,
     #[serde(rename = "command", default)]
     _command: Option<String>,
@@ -110,6 +112,10 @@ impl Tool for SubagentTool {
                     "type": "string",
                     "description": "Existing session ID."
                 },
+                "workflow_task_id": {
+                    "type": "string",
+                    "description": "Stable workflow task id. When agent_workflow is enabled, role/task resumes the same child session."
+                },
                 "output_mode": {
                     "type": "string",
                     "enum": ["answer", "compact", "full_transcript"],
@@ -125,8 +131,59 @@ impl Tool for SubagentTool {
 
     async fn execute(&self, input: Value, ctx: ToolContext) -> Result<ToolOutput> {
         let params: SubagentInput = serde_json::from_value(input)?;
+        let workflow_enabled = crate::agent_workflow::enabled();
+        let workflow_role = if workflow_enabled {
+            if !crate::agent_workflow::is_known_role(&params.subagent_type) {
+                anyhow::bail!(
+                    "unknown workflow subagent role '{}'. Allowed: {}",
+                    params.subagent_type,
+                    crate::agent_workflow::roles().join(", ")
+                );
+            }
+            if params.output_mode != SubagentOutputMode::Answer {
+                anyhow::bail!(
+                    "agent_workflow subagents return answer artifacts only; inspect child session explicitly for transcripts"
+                );
+            }
+            Some(params.subagent_type.as_str())
+        } else {
+            None
+        };
+        let workflow_task_id = params
+            .workflow_task_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if workflow_enabled && workflow_task_id.is_none() {
+            anyhow::bail!("workflow_task_id is required when agent_workflow is enabled");
+        }
 
-        let mut session = if let Some(session_id) = &params.session_id {
+        let parent_state = if workflow_enabled {
+            Session::load(&ctx.session_id)
+                .ok()
+                .and_then(|session| session.agent_workflow_state)
+        } else {
+            None
+        };
+        if let Some(role) = workflow_role {
+            crate::agent_workflow::role_can_spawn(parent_state.as_ref(), role)
+                .map_err(anyhow::Error::msg)?;
+            enforce_workflow_context_guard(&self.registry, self.provider.clone(), &ctx.session_id)?;
+        }
+
+        let resume_session_id = params.session_id.clone().or_else(|| {
+            workflow_role
+                .zip(workflow_task_id)
+                .and_then(|(role, task_id)| {
+                    crate::agent_workflow::find_existing_child_session(
+                        &ctx.session_id,
+                        role,
+                        task_id,
+                    )
+                })
+        });
+
+        let mut session = if let Some(session_id) = &resume_session_id {
             Session::load(session_id).unwrap_or_else(|err| {
                 logging::warn(&format!(
                     "[tool:subagent] failed to load existing session {}; creating a new subagent session instead: {}",
@@ -137,6 +194,12 @@ impl Tool for SubagentTool {
         } else {
             Session::create(Some(ctx.session_id.clone()), Some(subagent_title(&params)))
         };
+        if let Some(role) = workflow_role {
+            validate_workflow_child_session(&session, &ctx.session_id, role, workflow_task_id)?;
+            session.parent_id = Some(ctx.session_id.clone());
+            session.agent_role = Some(role.to_string());
+            session.workflow_task_id = workflow_task_id.map(str::to_string);
+        }
         let parent_subagent_model = Self::preferred_parent_subagent_model(&ctx.session_id);
         let provider_model = self.provider.model();
         let resolved_model = Self::resolve_model(
@@ -152,10 +215,24 @@ impl Tool for SubagentTool {
         }
 
         session.save()?;
+        if let (Some(role), Some(task_id)) = (workflow_role, workflow_task_id) {
+            update_parent_workflow_task(
+                &ctx.session_id,
+                task_id,
+                role,
+                &session.id,
+                crate::agent_workflow::role_status_for_start(role),
+                None,
+            )?;
+        }
 
         let mut allowed: HashSet<String> = self.registry.tool_names().await.into_iter().collect();
         for blocked in ["subagent", "task", "todo", "todowrite", "todoread"] {
             allowed.remove(blocked);
+        }
+        if let Some(role) = workflow_role {
+            let all_names = allowed.iter().cloned().collect::<Vec<_>>();
+            allowed = crate::agent_workflow::role_allowed_tools(role, &all_names);
         }
 
         let summary_map: Arc<Mutex<HashMap<String, ToolSummary>>> =
@@ -211,8 +288,18 @@ impl Tool for SubagentTool {
             Some(allowed),
         );
 
+        let prompt = if let Some(role) = workflow_role {
+            format!(
+                "{}{}",
+                params.prompt,
+                crate::agent_workflow::artifact_prompt(role, workflow_task_id)
+            )
+        } else {
+            params.prompt.clone()
+        };
+
         let start = std::time::Instant::now();
-        let final_text = agent.run_once_capture(&params.prompt).await.map_err(|err| {
+        let final_text = agent.run_once_capture(&prompt).await.map_err(|err| {
             logging::warn(&format!(
                 "[tool:subagent] subagent failed description={} type={} session_id={} model={} error={}",
                 params.description,
@@ -252,8 +339,32 @@ impl Tool for SubagentTool {
             .collect();
         summary.sort_by(|a, b| a.id.cmp(&b.id));
 
+        let (artifact_text, artifact_truncated) = if workflow_enabled {
+            crate::agent_workflow::cap_artifact(&final_text)
+        } else {
+            (final_text.clone(), false)
+        };
+        if let (Some(role), Some(task_id)) = (workflow_role, workflow_task_id) {
+            let mut task = workflow_task_state(
+                task_id,
+                role,
+                &sub_session_id,
+                crate::agent_workflow::role_status_for_complete(role),
+                Some(crate::agent_workflow::artifact_summary(&artifact_text)),
+            );
+            if role == crate::agent_workflow::ROLE_PLAN_FINALIZER {
+                update_parent_final_plan(&ctx.session_id, &artifact_text)?;
+            } else if role == crate::agent_workflow::ROLE_CODE_REVIEWER {
+                update_parent_review(&ctx.session_id, &artifact_text)?;
+            } else {
+                update_parent_workflow_task_state(&ctx.session_id, task.clone())?;
+            }
+            task.status = crate::agent_workflow::role_status_for_complete(role).to_string();
+            update_parent_workflow_task_state(&ctx.session_id, task)?;
+        }
+
         let output = format_subagent_output(
-            &final_text,
+            &artifact_text,
             &sub_session_id,
             params.output_mode,
             history.as_deref(),
@@ -267,8 +378,139 @@ impl Tool for SubagentTool {
                 "sessionId": sub_session_id,
                 "model": resolved_model,
                 "outputMode": params.output_mode.as_str(),
+                "artifactTruncated": artifact_truncated,
+                "workflowTaskId": workflow_task_id,
+                "agentRole": workflow_role,
             })))
     }
+}
+
+fn validate_workflow_child_session(
+    session: &Session,
+    parent_id: &str,
+    role: &str,
+    task_id: Option<&str>,
+) -> Result<()> {
+    if let Some(existing_parent) = session.parent_id.as_deref()
+        && existing_parent != parent_id
+    {
+        anyhow::bail!(
+            "workflow child session '{}' belongs to a different parent",
+            session.id
+        );
+    }
+    if let Some(existing_role) = session.agent_role.as_deref()
+        && existing_role != role
+    {
+        anyhow::bail!(
+            "workflow child session '{}' role mismatch: {} != {}",
+            session.id,
+            existing_role,
+            role
+        );
+    }
+    if let (Some(existing_task), Some(task_id)) = (session.workflow_task_id.as_deref(), task_id)
+        && existing_task != task_id
+    {
+        anyhow::bail!(
+            "workflow child session '{}' task mismatch: {} != {}",
+            session.id,
+            existing_task,
+            task_id
+        );
+    }
+    Ok(())
+}
+
+fn workflow_task_state(
+    task_id: &str,
+    role: &str,
+    session_id: &str,
+    status: &str,
+    summary: Option<String>,
+) -> crate::agent_workflow::AgentWorkflowTaskState {
+    crate::agent_workflow::AgentWorkflowTaskState {
+        id: task_id.to_string(),
+        agent_role: role.to_string(),
+        session_id: session_id.to_string(),
+        status: status.to_string(),
+        summary,
+        ..Default::default()
+    }
+}
+
+fn update_parent_workflow_task(
+    parent_id: &str,
+    task_id: &str,
+    role: &str,
+    session_id: &str,
+    status: &str,
+    summary: Option<String>,
+) -> Result<()> {
+    update_parent_workflow_task_state(
+        parent_id,
+        workflow_task_state(task_id, role, session_id, status, summary),
+    )
+}
+
+fn update_parent_workflow_task_state(
+    parent_id: &str,
+    task: crate::agent_workflow::AgentWorkflowTaskState,
+) -> Result<()> {
+    let mut parent = Session::load(parent_id)?;
+    let mut state = parent.agent_workflow_state.clone().unwrap_or_default();
+    state.status = task.status.clone();
+    state.upsert_task(task);
+    parent.agent_workflow_state = Some(state);
+    parent.save()
+}
+
+fn update_parent_final_plan(parent_id: &str, plan: &str) -> Result<()> {
+    let mut parent = Session::load(parent_id)?;
+    let mut state = parent.agent_workflow_state.clone().unwrap_or_default();
+    state.submit_final_plan(plan.to_string());
+    parent.agent_workflow_state = Some(state);
+    parent.save()
+}
+
+fn update_parent_review(parent_id: &str, review: &str) -> Result<()> {
+    let mut parent = Session::load(parent_id)?;
+    let mut state = parent.agent_workflow_state.clone().unwrap_or_default();
+    state.submit_review(review.to_string());
+    parent.agent_workflow_state = Some(state);
+    parent.save()
+}
+
+fn enforce_workflow_context_guard(
+    registry: &Registry,
+    provider: Arc<dyn Provider>,
+    parent_id: &str,
+) -> Result<()> {
+    if !provider.uses_jcode_compaction() {
+        return Ok(());
+    }
+    let mut parent = Session::load(parent_id)?;
+    let messages = parent.provider_messages().to_vec();
+    let compaction = registry.compaction();
+    let mut manager = compaction
+        .try_write()
+        .map_err(|_| anyhow::anyhow!("workflow context guard could not acquire compaction lock"))?;
+    let action = manager.ensure_context_fits(&messages, provider);
+    let hard_pct = crate::config::config()
+        .workflow
+        .orchestrator_context_hard_pct;
+    if manager.context_usage_with(&messages) >= hard_pct
+        && !matches!(
+            action,
+            crate::compaction::CompactionAction::HardCompacted(_)
+        )
+    {
+        anyhow::bail!(
+            "workflow context guard stopped delegation at {:.0}% context; run /compact or reduce scope",
+            hard_pct * 100.0
+        );
+    }
+    Ok(())
 }
 
 fn subagent_title(params: &SubagentInput) -> String {
@@ -366,9 +608,10 @@ fn format_compact_subagent_history(messages: &[HistoryMessage]) -> String {
 mod tests {
     use super::{
         SubagentInput, SubagentOutputMode, format_compact_subagent_history, format_subagent_output,
-        subagent_display_title,
+        subagent_display_title, validate_workflow_child_session, workflow_task_state,
     };
     use crate::protocol::HistoryMessage;
+    use crate::session::Session;
 
     #[test]
     fn subagent_display_title_includes_type_and_model() {
@@ -378,6 +621,7 @@ mod tests {
             subagent_type: "general".to_string(),
             model: None,
             session_id: None,
+            workflow_task_id: None,
             output_mode: SubagentOutputMode::Answer,
             _command: None,
         };
@@ -475,5 +719,61 @@ mod tests {
     #[test]
     fn compact_history_formats_empty_transcript() {
         assert_eq!(format_compact_subagent_history(&[]), "(empty transcript)\n");
+    }
+
+    #[test]
+    fn workflow_child_session_validation_rejects_role_or_task_mismatch() {
+        let mut session = Session::create_with_id(
+            "workflow_child_validation".to_string(),
+            Some("parent".to_string()),
+            None,
+        );
+        session.agent_role = Some(crate::agent_workflow::ROLE_FRONTEND.to_string());
+        session.workflow_task_id = Some("task-ui".to_string());
+
+        assert!(
+            validate_workflow_child_session(
+                &session,
+                "parent",
+                crate::agent_workflow::ROLE_FRONTEND,
+                Some("task-ui")
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_workflow_child_session(
+                &session,
+                "parent",
+                crate::agent_workflow::ROLE_BACKEND,
+                Some("task-ui")
+            )
+            .is_err()
+        );
+        assert!(
+            validate_workflow_child_session(
+                &session,
+                "parent",
+                crate::agent_workflow::ROLE_FRONTEND,
+                Some("task-api")
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn workflow_task_state_records_role_session_status() {
+        let task = workflow_task_state(
+            "task-ui",
+            crate::agent_workflow::ROLE_FRONTEND,
+            "session-child",
+            crate::agent_workflow::STATUS_IMPLEMENTING,
+            Some("artifact summary".to_string()),
+        );
+
+        assert_eq!(task.id, "task-ui");
+        assert_eq!(task.agent_role, crate::agent_workflow::ROLE_FRONTEND);
+        assert_eq!(task.session_id, "session-child");
+        assert_eq!(task.status, crate::agent_workflow::STATUS_IMPLEMENTING);
+        assert_eq!(task.summary.as_deref(), Some("artifact summary"));
     }
 }
