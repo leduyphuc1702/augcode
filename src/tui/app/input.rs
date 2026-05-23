@@ -2095,6 +2095,10 @@ impl App {
             return;
         }
 
+        if crate::agent_workflow::enabled() {
+            crate::agent_workflow::ensure_orchestrator_front_door(&mut self.session);
+        }
+
         // Add user message to display (show placeholder to user, not full paste)
         self.push_display_message(DisplayMessage {
             role: "user".to_string(),
@@ -2200,6 +2204,9 @@ impl App {
             self.current_turn_system_reminder = reminder;
 
             if has_combined {
+                if crate::agent_workflow::enabled() {
+                    crate::agent_workflow::ensure_orchestrator_front_door(&mut self.session);
+                }
                 self.add_provider_message(Message::user(&combined));
                 self.session.add_message(
                     Role::User,

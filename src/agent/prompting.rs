@@ -121,16 +121,9 @@ impl Agent {
             if !split.dynamic_part.is_empty() {
                 split.dynamic_part.push_str("\n\n");
             }
-            split.dynamic_part.push_str("# Agent Workflow\n\n");
-            split.dynamic_part.push_str(&format!(
-                "Current agent role: `{}`. Keep orchestration artifacts compact. Do not paste full child transcripts or long logs into the parent session.",
-                role
-            ));
-            if role == crate::agent_workflow::ROLE_ORCHESTRATOR {
-                split.dynamic_part.push_str(
-                    "\nUse planning/review/finalizer subagents before implementation. Stop for `/approve-plan` before spawning implementation agents and stop for `/approve-review` after code review.",
-                );
-            }
+            split
+                .dynamic_part
+                .push_str(&crate::agent_workflow::workflow_prompt_for_role(&role));
         }
 
         let route_messages = self

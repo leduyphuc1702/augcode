@@ -68,7 +68,17 @@ impl App {
                 self.handle_compaction_event(event);
             }
 
-            let tools = self.registry.definitions(None).await;
+            let mut tools = self.registry.definitions(None).await;
+            if crate::agent_workflow::enabled() {
+                crate::agent_workflow::ensure_orchestrator_front_door(&mut self.session);
+                let role = crate::agent_workflow::effective_role(&self.session);
+                let all_names = tools
+                    .iter()
+                    .map(|tool| tool.name.clone())
+                    .collect::<Vec<_>>();
+                let allowed = crate::agent_workflow::role_allowed_tools(&role, &all_names);
+                tools.retain(|tool| allowed.contains(&tool.name));
+            }
             // Non-blocking memory: uses pending result from last turn, spawns check for next turn
             let memory_pending = self.build_memory_prompt_nonblocking(&provider_messages);
             // Use split prompt for better caching - static content cached, dynamic not
@@ -1070,6 +1080,18 @@ impl App {
                 }
 
                 // Execute locally
+                if crate::agent_workflow::enabled() {
+                    let available = tools
+                        .iter()
+                        .map(|tool| tool.name.clone())
+                        .collect::<std::collections::HashSet<_>>();
+                    crate::agent_workflow::validate_tool_for_role(
+                        &self.session,
+                        &tc.name,
+                        Some(&available),
+                    )
+                    .map_err(anyhow::Error::msg)?;
+                }
                 let ctx = ToolContext {
                     session_id: self.session.id.clone(),
                     message_id: message_id.clone(),

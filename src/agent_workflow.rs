@@ -13,6 +13,7 @@ pub const ROLE_CODE_REVIEWER: &str = "code-reviewer";
 pub const ROLE_IMPLEMENTER: &str = "implementer";
 
 pub const STATUS_IDLE: &str = "idle";
+pub const STATUS_CLARIFYING: &str = "clarifying";
 pub const STATUS_PLANNING: &str = "planning";
 pub const STATUS_AWAITING_PLAN_APPROVAL: &str = "awaiting_plan_approval";
 pub const STATUS_IMPLEMENTATION_ALLOWED: &str = "implementation_allowed";
@@ -203,6 +204,72 @@ pub fn effective_role(session: &Session) -> String {
         })
 }
 
+pub fn ensure_orchestrator_front_door(session: &mut Session) {
+    if !enabled() || session.parent_id.is_some() {
+        return;
+    }
+    session.agent_role = Some(ROLE_ORCHESTRATOR.to_string());
+    session
+        .agent_workflow_state
+        .get_or_insert_with(AgentWorkflowState::default);
+}
+
+pub fn canonical_tool_name(name: &str) -> &str {
+    match name {
+        "communicate" => "swarm",
+        "task" | "task_runner" => "subagent",
+        "shell_exec" => "bash",
+        "file_read" => "read",
+        "file_write" => "write",
+        "file_edit" => "edit",
+        "file_glob" => "glob",
+        "file_grep" => "grep",
+        "skill" | "Skill" => "skill_manage",
+        "todoread" | "todowrite" | "todo_read" | "todo_write" => "todo",
+        other => other,
+    }
+}
+
+pub fn validate_tool_for_role(
+    session: &Session,
+    name: &str,
+    available_tool_names: Option<&HashSet<String>>,
+) -> Result<(), String> {
+    let role = effective_role(session);
+    let resolved = canonical_tool_name(name);
+    if let Some(available) = available_tool_names {
+        let all = available.iter().cloned().collect::<Vec<_>>();
+        let allowed = role_allowed_tools(&role, &all);
+        if !allowed.contains(resolved) {
+            return Err(format!(
+                "Tool '{}' is blocked for workflow role '{}'",
+                name, role
+            ));
+        }
+    }
+    if non_implementer_blocked_tools().contains(&resolved)
+        && matches!(
+            role.as_str(),
+            ROLE_ORCHESTRATOR | ROLE_PLAN_AGENT | ROLE_PLAN_REVIEWER | ROLE_PLAN_FINALIZER
+        )
+    {
+        return Err(format!(
+            "Tool '{}' is blocked for workflow role '{}'",
+            name, role
+        ));
+    }
+    if edit_tools().contains(&resolved) && role == ROLE_CODE_REVIEWER {
+        return Err(format!(
+            "Tool '{}' is blocked for workflow role '{}'",
+            name, role
+        ));
+    }
+    if edit_tools().contains(&resolved) && matches!(role.as_str(), ROLE_FRONTEND | ROLE_BACKEND) {
+        workflow_allows_implementation_mutation(session)?;
+    }
+    Ok(())
+}
+
 pub fn mutation_tools() -> &'static [&'static str] {
     edit_tools()
 }
@@ -245,6 +312,8 @@ pub fn role_allowed_tools(role: &str, all_tools: &[String]) -> HashSet<String> {
             "todo",
             "skill_manage",
             "agent_workflow",
+            "swarm",
+            "communicate",
             "read",
             "read_file",
             "grep",
@@ -274,6 +343,8 @@ pub fn role_allowed_tools(role: &str, all_tools: &[String]) -> HashSet<String> {
             "session_search",
             "memory",
             "mcp",
+            "swarm",
+            "communicate",
             "skill_manage",
             "todo",
         ]),
@@ -302,6 +373,8 @@ pub fn role_allowed_tools(role: &str, all_tools: &[String]) -> HashSet<String> {
             "memory",
             "mcp",
             "skill_manage",
+            "swarm",
+            "communicate",
             "bash",
             "browser",
             "webfetch",
@@ -360,6 +433,28 @@ pub fn role_status_for_complete(role: &str) -> &'static str {
     }
 }
 
+pub fn workflow_prompt_for_role(role: &str) -> String {
+    let mut prompt = format!(
+        "# Agent Workflow\n\nCurrent agent role: `{role}`. Keep orchestration artifacts compact. Do not paste full child transcripts or long logs into the parent session.\n\nAll workflow agents obey these invariants:\n- Think Before Coding: state assumptions; if unclear, ask or return `needs_clarification`; never guess silently.\n- Simplicity First: implement the smallest solution that satisfies the request; avoid unused abstraction or extra configurability.\n- Surgical Changes: touch only files required by the task; match local style; do not refactor unrelated code.\n- Goal-Driven Execution: define success criteria; verify before claiming completion; report any verification not run.\n"
+    );
+    match role {
+        ROLE_ORCHESTRATOR => prompt.push_str(
+            "\nOrchestrator contract:\n- You are the default user-facing agent. If the user mentions another agent, still receive the prompt first, then delegate.\n- When requirements are ambiguous or risky, ask concise clarifying questions before delegation.\n- Before each delegation, briefly cover `understanding`, `assumptions`, `critique`, `simpler_option`, and `delegation`.\n- Use `plan-agent`, `plan-reviewer`, then `plan-finalizer` before implementation. Use stable `workflow_task_id`s so child sessions resume.\n- Submit the final plan with `agent_workflow submit_final_plan`, then stop for `/approve-plan`.\n- After implementation agents finish, delegate `code-reviewer`, summarize `result_summary`, `verification`, `risks`, and `accept_or_rework`, submit review, then stop for `/approve-review`.\n- Aggregate child artifacts and communication reports only; inspect full transcripts only on explicit debug need.\n",
+        ),
+        ROLE_PLAN_AGENT | ROLE_PLAN_REVIEWER | ROLE_PLAN_FINALIZER => prompt.push_str(
+            "\nPlanning contract: produce compact planning artifacts only. If scope is unclear, return `needs_clarification` with exact questions. Do not edit files.\n",
+        ),
+        ROLE_FRONTEND | ROLE_BACKEND => prompt.push_str(
+            "\nImplementation contract: implement only assigned scope after plan approval. Keep diffs surgical. Report assumptions, scope control, files changed, commands run, validation, risks, and handoff.\n",
+        ),
+        ROLE_CODE_REVIEWER => prompt.push_str(
+            "\nReview contract: review and verify; do not edit files. Lead with findings, test results, residual risk, and accept_or_rework recommendation.\n",
+        ),
+        _ => {}
+    }
+    prompt
+}
+
 pub fn workflow_allows_implementation_mutation(session: &Session) -> Result<(), String> {
     let Some(parent_id) = session.parent_id.as_deref() else {
         return Err("workflow implementation agents require a parent orchestrator session".into());
@@ -386,7 +481,7 @@ pub fn workflow_allows_implementation_mutation(session: &Session) -> Result<(), 
 
 pub fn artifact_prompt(role: &str, task_id: Option<&str>) -> String {
     format!(
-        "\n\n<agent_workflow_contract>\nrole: {role}\ntask_id: {}\nReturn only a compact artifact for the orchestrator. Include: summary, files_changed, commands_run, validation, risks, next_action, handoff. Do not paste full logs or full transcripts; store details in this child session.\n</agent_workflow_contract>",
+        "\n\n<agent_workflow_contract>\nrole: {role}\ntask_id: {}\nReturn only a compact artifact for the orchestrator. Include: summary, assumptions, scope_control, files_changed, commands_run, validation, risks, next_action, handoff. If ambiguity blocks safe work, set next_action to `needs_clarification` and include exact questions; do not guess. Do not paste full logs or full transcripts; store details in this child session.\n</agent_workflow_contract>",
         task_id.unwrap_or("unassigned")
     )
 }
@@ -617,7 +712,7 @@ mod tests {
 
     #[test]
     fn workflow_role_tool_matrix_keeps_reviewer_read_only_except_shell() {
-        let tools = ["read", "bash", "write", "skill_manage"]
+        let tools = ["read", "bash", "write", "skill_manage", "swarm"]
             .into_iter()
             .map(str::to_string)
             .collect::<Vec<_>>();
@@ -625,11 +720,67 @@ mod tests {
         let reviewer = role_allowed_tools(ROLE_CODE_REVIEWER, &tools);
         assert!(reviewer.contains("bash"));
         assert!(reviewer.contains("read"));
+        assert!(reviewer.contains("swarm"));
         assert!(!reviewer.contains("write"));
 
         let planner = role_allowed_tools(ROLE_PLAN_AGENT, &tools);
         assert!(planner.contains("read"));
+        assert!(planner.contains("swarm"));
         assert!(!planner.contains("bash"));
         assert!(!planner.contains("write"));
+    }
+
+    #[test]
+    fn workflow_front_door_forces_root_session_to_orchestrator() {
+        let _lock = crate::storage::lock_test_env();
+        let temp = tempfile::tempdir().unwrap();
+        let _home = EnvVarGuard::set("JCODE_HOME", temp.path().as_os_str());
+        let _enabled =
+            EnvVarGuard::set("JCODE_AGENT_WORKFLOW_ENABLED", std::ffi::OsStr::new("true"));
+        crate::config::invalidate_config_cache();
+
+        let mut root = Session::create_with_id("workflow_root".into(), None, None);
+        root.agent_role = Some(ROLE_BACKEND.to_string());
+        ensure_orchestrator_front_door(&mut root);
+        assert_eq!(root.agent_role.as_deref(), Some(ROLE_ORCHESTRATOR));
+        assert!(root.agent_workflow_state.is_some());
+
+        let mut child =
+            Session::create_with_id("workflow_child_role".into(), Some(root.id.clone()), None);
+        child.agent_role = Some(ROLE_FRONTEND.to_string());
+        ensure_orchestrator_front_door(&mut child);
+        assert_eq!(child.agent_role.as_deref(), Some(ROLE_FRONTEND));
+    }
+
+    #[test]
+    fn workflow_contract_prompts_require_clarification_and_structured_review() {
+        let orchestrator = workflow_prompt_for_role(ROLE_ORCHESTRATOR);
+        assert!(orchestrator.contains("Think Before Coding"));
+        assert!(orchestrator.contains("Simplicity First"));
+        assert!(orchestrator.contains("Surgical Changes"));
+        assert!(orchestrator.contains("Goal-Driven Execution"));
+        assert!(orchestrator.contains("understanding"));
+        assert!(orchestrator.contains("critique"));
+        assert!(orchestrator.contains("simpler_option"));
+        assert!(orchestrator.contains("accept_or_rework"));
+
+        let artifact = artifact_prompt(ROLE_BACKEND, Some("task-api"));
+        assert!(artifact.contains("assumptions"));
+        assert!(artifact.contains("scope_control"));
+        assert!(artifact.contains("needs_clarification"));
+    }
+
+    #[test]
+    fn workflow_tool_validation_resolves_communication_aliases() {
+        let mut session = Session::create_with_id("workflow_alias".into(), None, None);
+        session.agent_role = Some(ROLE_ORCHESTRATOR.to_string());
+        session.agent_workflow_state = Some(AgentWorkflowState::default());
+        let available = ["swarm", "read", "write"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<HashSet<_>>();
+
+        assert!(validate_tool_for_role(&session, "communicate", Some(&available)).is_ok());
+        assert!(validate_tool_for_role(&session, "write", Some(&available)).is_err());
     }
 }
