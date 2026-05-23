@@ -117,7 +117,6 @@ changed files: {:?}\nterms: {:?}\n",
     }
 }
 
-
 #[cfg(test)]
 #[path = "commit_lineage_search_tests.rs"]
 mod tests;

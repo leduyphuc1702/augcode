@@ -849,6 +849,7 @@ impl crate::tui::TuiState for App {
                     id: item.id.clone(),
                     blocked_by: item.blocked_by.clone(),
                     assigned_to: item.assigned_to.clone(),
+                    ..Default::default()
                 })
                 .collect()
         } else {

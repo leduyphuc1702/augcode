@@ -675,6 +675,7 @@ fn test_improve_status_summarizes_current_todos() {
                     priority: "high".to_string(),
                     blocked_by: Vec::new(),
                     assigned_to: None,
+                ..Default::default()
                 },
                 crate::todo::TodoItem {
                     id: "two".to_string(),
@@ -683,6 +684,7 @@ fn test_improve_status_summarizes_current_todos() {
                     priority: "medium".to_string(),
                     blocked_by: Vec::new(),
                     assigned_to: None,
+                ..Default::default()
                 },
             ],
         )
@@ -771,6 +773,7 @@ fn test_improve_resume_uses_saved_mode_and_current_todos() {
                 priority: "high".to_string(),
                 blocked_by: Vec::new(),
                 assigned_to: None,
+                ..Default::default()
             }],
         )
         .expect("save todos");

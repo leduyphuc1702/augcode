@@ -15,25 +15,71 @@ impl App {
         }
 
         let skills = self.current_skills_snapshot();
-        let skill_prompt = self
-            .active_skill
-            .as_ref()
-            .and_then(|name| skills.get(name).map(|s| s.get_prompt().to_string()));
-        let available_skills: Vec<crate::prompt::SkillInfo> = skills
-            .list()
-            .iter()
-            .map(|s| crate::prompt::SkillInfo {
-                name: s.name.clone(),
-                description: s.description.clone(),
+        let skill_prompt = self.active_skill.as_ref().and_then(|name| {
+            skills.get(name).map(|s| {
+                if crate::skill_router::enabled() {
+                    s.get_untrusted_prompt()
+                } else {
+                    s.get_prompt()
+                }
             })
-            .collect();
+        });
+        let use_router = crate::skill_router::enabled();
+        let available_skills: Vec<crate::prompt::SkillInfo> = if use_router {
+            Vec::new()
+        } else {
+            skills
+                .list()
+                .iter()
+                .map(|s| crate::prompt::SkillInfo {
+                    name: s.name.clone(),
+                    description: s.description.clone(),
+                })
+                .collect()
+        };
+        let working_dir = self
+            .session
+            .working_dir
+            .as_ref()
+            .map(std::path::PathBuf::from);
         let (mut split, context_info) = crate::prompt::build_system_prompt_split(
             skill_prompt.as_deref(),
             &available_skills,
             self.session.is_canary,
             memory_prompt,
-            None,
+            working_dir.as_deref(),
         );
+        let route_messages = self
+            .session
+            .messages
+            .iter()
+            .map(|message| message.to_message())
+            .collect::<Vec<_>>();
+        if use_router
+            && let Some(prompt_text) = crate::skill_router::latest_user_text(&route_messages)
+        {
+            let manifests = skills.manifests();
+            let agent = crate::skill_router::AgentProfile::from_allowed_tools(
+                self.session.id.clone(),
+                "implementer",
+                None,
+            );
+            let routing = crate::skill_router::route_for_prompt(
+                &manifests,
+                &prompt_text,
+                working_dir.as_deref(),
+                &agent,
+                "turn",
+            );
+            if let Some(context) =
+                crate::skill_router::render_manifest_context(&routing, &manifests)
+            {
+                if !split.dynamic_part.is_empty() {
+                    split.dynamic_part.push_str("\n\n");
+                }
+                split.dynamic_part.push_str(&context);
+            }
+        }
         self.append_current_turn_system_reminder(&mut split);
         self.context_info = context_info;
         split

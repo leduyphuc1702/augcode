@@ -1,7 +1,7 @@
 //! Skill tool - load, list, reload, and read skills
 
 use super::{Tool, ToolContext, ToolOutput};
-use crate::skill::SkillRegistry;
+use crate::skill::{SkillLookup, SkillRegistry};
 use anyhow::Result;
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -32,6 +32,9 @@ struct SkillInput {
     /// needs to load the prompt, so args are currently accepted and ignored.
     #[serde(default)]
     args: Option<String>,
+    /// Optional task intent/path hint used by the router when validating scoped skills.
+    #[serde(default)]
+    intent: Option<String>,
 }
 
 fn default_action() -> String {
@@ -71,13 +74,30 @@ impl Tool for SkillTool {
         let action_label = params.action.clone();
         let name_label = params.name.clone().unwrap_or_else(|| "<none>".to_string());
         let _args = params.args.as_deref();
+        let intent = params.intent.clone();
 
         match params.action.as_str() {
-            "load" => self.load_skill(params.name).await,
+            "load" => {
+                self.load_skill(
+                    params.name,
+                    ctx.working_dir.as_deref(),
+                    ctx.allowed_tools.as_ref(),
+                    intent.as_deref(),
+                )
+                .await
+            }
             "list" => self.list_skills().await,
             "reload" => self.reload_skill(params.name).await,
             "reload_all" => self.reload_all_skills(ctx.working_dir.as_deref()).await,
-            "read" => self.read_skill(params.name).await,
+            "read" => {
+                self.read_skill(
+                    params.name,
+                    ctx.working_dir.as_deref(),
+                    ctx.allowed_tools.as_ref(),
+                    intent.as_deref(),
+                )
+                .await
+            }
             _ => Ok(ToolOutput::new(format!(
                 "Unknown action: {}. Use 'load', 'list', 'reload', 'reload_all', or 'read'.",
                 params.action
@@ -94,13 +114,18 @@ impl Tool for SkillTool {
 }
 
 impl SkillTool {
-    async fn load_skill(&self, name: Option<String>) -> Result<ToolOutput> {
+    async fn load_skill(
+        &self,
+        name: Option<String>,
+        working_dir: Option<&std::path::Path>,
+        allowed_tools: Option<&std::collections::HashSet<String>>,
+        intent: Option<&str>,
+    ) -> Result<ToolOutput> {
         let name = normalize_skill_name(name, "load")?;
 
         let registry = self.registry.read().await;
-        let skill = registry
-            .get(&name)
-            .ok_or_else(|| anyhow::anyhow!("Skill '{}' not found", name))?;
+        let skill = resolve_skill(&registry, &name)?;
+        validate_router_access(skill, working_dir, allowed_tools, intent, "load")?;
 
         let base_dir = skill
             .path
@@ -112,7 +137,11 @@ impl SkillTool {
             "## Skill: {}\n\n**Base directory**: {}\n\n{}",
             skill.name,
             base_dir,
-            skill.get_prompt()
+            if crate::skill_router::enabled() {
+                skill.get_untrusted_prompt()
+            } else {
+                skill.get_prompt()
+            }
         ))
         .with_title(format!("skill: {}", skill.name)))
     }
@@ -143,6 +172,12 @@ impl SkillTool {
         for skill in skills {
             output.push_str(&format!("## /{}\n", skill.name));
             output.push_str(&format!("  {}\n", skill.description));
+            output.push_str(&format!("  ID: {}\n", skill.id));
+            output.push_str(&format!("  Source: {}\n", skill.manifest.source_kind));
+            output.push_str(&format!(
+                "  Invocation: {}\n",
+                skill.manifest.invocation_mode
+            ));
             output.push_str(&format!("  Path: {}\n", skill.path.display()));
             if let Some(ref tools) = skill.allowed_tools {
                 output.push_str(&format!("  Tools: {}\n", tools.join(", ")));
@@ -217,15 +252,28 @@ impl SkillTool {
         }
     }
 
-    async fn read_skill(&self, name: Option<String>) -> Result<ToolOutput> {
+    async fn read_skill(
+        &self,
+        name: Option<String>,
+        working_dir: Option<&std::path::Path>,
+        allowed_tools: Option<&std::collections::HashSet<String>>,
+        intent: Option<&str>,
+    ) -> Result<ToolOutput> {
         let name = normalize_skill_name(name, "read")?;
 
         let registry = self.registry.read().await;
 
-        if let Some(skill) = registry.get(&name) {
+        if let SkillLookup::Found(skill) = registry.lookup(&name) {
+            validate_router_access(skill, working_dir, allowed_tools, intent, "read")?;
             let mut output = format!("# Skill: {}\n\n", skill.name);
+            output.push_str(&format!("**ID:** {}\n", skill.id));
             output.push_str(&format!("**Description:** {}\n", skill.description));
             output.push_str(&format!("**Path:** {}\n", skill.path.display()));
+            output.push_str(&format!("**Source:** {}\n", skill.manifest.source_kind));
+            output.push_str(&format!(
+                "**Invocation:** {}\n",
+                skill.manifest.invocation_mode
+            ));
             if let Some(ref tools) = skill.allowed_tools {
                 output.push_str(&format!("**Allowed tools:** {}\n", tools.join(", ")));
             }
@@ -233,6 +281,8 @@ impl SkillTool {
             output.push_str(&skill.content);
 
             Ok(ToolOutput::new(output).with_title(format!("Skills: {}", name)))
+        } else if let SkillLookup::Ambiguous(matches) = registry.lookup(&name) {
+            Ok(ToolOutput::new(format_ambiguity(&name, matches)).with_title("Skills: Ambiguous"))
         } else {
             Ok(ToolOutput::new(format!(
                 "Skill '{}' not found.\n\nUse 'list' to see available skills.",
@@ -241,6 +291,65 @@ impl SkillTool {
             .with_title("Skills: Not found"))
         }
     }
+}
+
+fn validate_router_access(
+    skill: &crate::skill::Skill,
+    working_dir: Option<&std::path::Path>,
+    allowed_tools: Option<&std::collections::HashSet<String>>,
+    intent: Option<&str>,
+    action: &str,
+) -> Result<()> {
+    if !crate::skill_router::enabled() {
+        return Ok(());
+    }
+    let agent = crate::skill_router::AgentProfile::from_allowed_tools(
+        "skill_manage",
+        "implementer",
+        allowed_tools,
+    );
+    crate::skill_router::validate_explicit_load_for_intent(
+        &skill.manifest,
+        working_dir,
+        &agent,
+        intent,
+    )
+    .map_err(|reason| {
+        anyhow::anyhow!(
+            "Skill '{}' blocked by router during {}: {}",
+            skill.name,
+            action,
+            reason
+        )
+    })
+}
+
+fn resolve_skill<'a>(registry: &'a SkillRegistry, name: &str) -> Result<&'a crate::skill::Skill> {
+    match registry.lookup(name) {
+        SkillLookup::Found(skill) => Ok(skill),
+        SkillLookup::Ambiguous(matches) => anyhow::bail!("{}", format_ambiguity(name, matches)),
+        SkillLookup::Missing => anyhow::bail!("Skill '{}' not found", name),
+    }
+}
+
+fn format_ambiguity(name: &str, matches: Vec<&crate::skill::Skill>) -> String {
+    let mut output = format!(
+        "Skill '{}' is ambiguous. Use a skill ID or source:scope:name.\n\n",
+        name
+    );
+    for skill in matches {
+        let scope = skill
+            .manifest
+            .scope_dir
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "global".to_string());
+        output.push_str(&format!(
+            "- {} | source={} scope={} name={}\n",
+            skill.id, skill.manifest.source_kind, scope, skill.manifest.canonical_name
+        ));
+    }
+    output
 }
 
 fn normalize_skill_name(name: Option<String>, action: &str) -> Result<String> {
@@ -255,6 +364,29 @@ fn normalize_skill_name(name: Option<String>, action: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct EnvVarGuard {
+        key: &'static str,
+        prev: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let prev = std::env::var_os(key);
+            crate::env::set_var(key, value);
+            Self { key, prev }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(prev) = self.prev.take() {
+                crate::env::set_var(self.key, prev);
+            } else {
+                crate::env::remove_var(self.key);
+            }
+        }
+    }
 
     fn create_test_tool() -> SkillTool {
         let registry = Arc::new(RwLock::new(SkillRegistry::default()));
@@ -278,12 +410,86 @@ mod tests {
         (tool, temp_dir)
     }
 
+    fn create_test_tool_with_duplicate_skill(name: &str) -> (SkillTool, tempfile::TempDir) {
+        let temp_dir = tempfile::tempdir().unwrap();
+        for scope in [".jcode", ".claude"] {
+            let skill_dir = temp_dir.path().join(scope).join("skills").join(name);
+            std::fs::create_dir_all(&skill_dir).unwrap();
+            std::fs::write(
+                skill_dir.join("SKILL.md"),
+                format!(
+                    "---\nname: {name}\ndescription: Test skill {scope}\n---\n\n# Test Skill\n\nUse this test skill."
+                ),
+            )
+            .unwrap();
+        }
+
+        let registry = SkillRegistry::load_for_working_dir(Some(temp_dir.path())).unwrap();
+        let tool = SkillTool::new(Arc::new(RwLock::new(registry)));
+        (tool, temp_dir)
+    }
+
+    fn create_test_tool_with_denied_skill(name: &str) -> (SkillTool, tempfile::TempDir) {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let skill_dir = temp_dir.path().join(".jcode").join("skills").join(name);
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            format!(
+                "---\nname: {name}\ndescription: Use this skill for blocked router tests\ndenied_agents: implementer\n---\n\n# Test Skill\n\nUse this test skill."
+            ),
+        )
+        .unwrap();
+
+        let registry = SkillRegistry::load_for_working_dir(Some(temp_dir.path())).unwrap();
+        let tool = SkillTool::new(Arc::new(RwLock::new(registry)));
+        (tool, temp_dir)
+    }
+
+    fn create_test_tool_with_required_tool(
+        name: &str,
+        required_tool: &str,
+    ) -> (SkillTool, tempfile::TempDir) {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let skill_dir = temp_dir.path().join(".jcode").join("skills").join(name);
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            format!(
+                "---\nname: {name}\ndescription: Use this skill for required tool checks\nrequired_tools: {required_tool}\n---\n\n# Test Skill\n\nUse this test skill."
+            ),
+        )
+        .unwrap();
+
+        let registry = SkillRegistry::load_for_working_dir(Some(temp_dir.path())).unwrap();
+        let tool = SkillTool::new(Arc::new(RwLock::new(registry)));
+        (tool, temp_dir)
+    }
+
+    fn create_test_tool_with_nested_skill(name: &str) -> (SkillTool, tempfile::TempDir) {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let skill_dir = temp_dir.path().join("apps/web/.cursor/skills").join(name);
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            format!(
+                "---\nname: {name}\ndescription: Use this skill for React TypeScript component work\n---\n\n# React Skill\n\nUse this test skill."
+            ),
+        )
+        .unwrap();
+
+        let registry = SkillRegistry::load_for_working_dir(Some(temp_dir.path())).unwrap();
+        let tool = SkillTool::new(Arc::new(RwLock::new(registry)));
+        (tool, temp_dir)
+    }
+
     fn create_test_context() -> ToolContext {
         ToolContext {
             session_id: "test-session".to_string(),
             message_id: "test-message".to_string(),
             tool_call_id: "test-tool-call".to_string(),
             working_dir: None,
+            allowed_tools: None,
             stdin_request_tx: None,
             graceful_shutdown_signal: None,
             execution_mode: crate::tool::ToolExecutionMode::Direct,
@@ -351,6 +557,113 @@ mod tests {
 
         let result = tool.execute(input, ctx).await.unwrap();
         assert!(result.output.contains("## Skill: optimization"));
+    }
+
+    #[tokio::test]
+    async fn test_load_ambiguous_name_reports_disambiguators() {
+        let (tool, _temp_dir) = create_test_tool_with_duplicate_skill("dup-skill");
+        let ctx = create_test_context();
+        let input = json!({"action": "load", "name": "dup-skill"});
+
+        let result = tool.execute(input, ctx).await;
+
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("ambiguous"));
+        assert!(error.contains("source="));
+    }
+
+    #[tokio::test]
+    async fn test_load_and_read_reject_router_blocked_skill() {
+        let _lock = crate::storage::lock_test_env();
+        let _env = EnvVarGuard::set("JCODE_PER_AGENT_SKILL_ROUTER_ENABLED", "true");
+        let (tool, _temp_dir) = create_test_tool_with_denied_skill("blocked-skill");
+
+        let load = tool
+            .execute(
+                json!({"action": "load", "name": "blocked-skill"}),
+                create_test_context(),
+            )
+            .await;
+        let load_error = load.unwrap_err().to_string();
+        assert!(load_error.contains("blocked by router"));
+        assert!(load_error.contains("agent-denied"));
+
+        let read = tool
+            .execute(
+                json!({"action": "read", "name": "blocked-skill"}),
+                create_test_context(),
+            )
+            .await;
+        let read_error = read.unwrap_err().to_string();
+        assert!(read_error.contains("blocked by router"));
+        assert!(read_error.contains("agent-denied"));
+    }
+
+    #[tokio::test]
+    async fn test_load_rejects_required_tool_not_allowed() {
+        let _lock = crate::storage::lock_test_env();
+        let _env = EnvVarGuard::set("JCODE_PER_AGENT_SKILL_ROUTER_ENABLED", "true");
+        let (tool, temp_dir) = create_test_tool_with_required_tool("needs-bash", "bash");
+        let mut ctx = create_test_context();
+        ctx.working_dir = Some(temp_dir.path().to_path_buf());
+        ctx.allowed_tools = Some(std::collections::HashSet::from(
+            ["skill_manage".to_string()],
+        ));
+
+        let result = tool
+            .execute(json!({"action": "load", "name": "needs-bash"}), ctx)
+            .await;
+
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("required-tool-unavailable"));
+    }
+
+    #[tokio::test]
+    async fn test_read_requires_intent_for_path_scoped_skill() {
+        let _lock = crate::storage::lock_test_env();
+        let _env = EnvVarGuard::set("JCODE_PER_AGENT_SKILL_ROUTER_ENABLED", "true");
+        let (tool, temp_dir) = create_test_tool_with_nested_skill("react-component");
+        let mut ctx = create_test_context();
+        ctx.working_dir = Some(temp_dir.path().to_path_buf());
+
+        let blocked = tool
+            .execute(
+                json!({"action": "read", "name": "react-component"}),
+                ctx.clone(),
+            )
+            .await;
+        let error = blocked.unwrap_err().to_string();
+        assert!(error.contains("path-scope-mismatch"));
+
+        let allowed = tool
+            .execute(
+                json!({
+                    "action": "read",
+                    "name": "react-component",
+                    "intent": "Edit apps/web/src/Button.tsx"
+                }),
+                ctx,
+            )
+            .await
+            .unwrap();
+
+        assert!(allowed.output.contains("# Skill: react-component"));
+    }
+
+    #[tokio::test]
+    async fn test_read_accepts_skill_id() {
+        let (tool, _temp_dir) = create_test_tool_with_skill("id-skill");
+        let id = {
+            let registry = tool.registry.read().await;
+            registry.get("id-skill").unwrap().id.clone()
+        };
+        let ctx = create_test_context();
+        let input = json!({"action": "read", "name": id});
+
+        let result = tool.execute(input, ctx).await.unwrap();
+
+        assert!(result.output.contains("# Skill: id-skill"));
+        assert!(result.output.contains("**ID:**"));
     }
 
     #[tokio::test]

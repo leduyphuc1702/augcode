@@ -1,7 +1,9 @@
 use super::{Tool, ToolContext, ToolOutput};
 use anyhow::Result;
 use async_trait::async_trait;
-use jcode_codebase_retrieval::{CodebaseRetrievalEngine, RetrievalEvalCase, root_from_context_path};
+use jcode_codebase_retrieval::{
+    CodebaseRetrievalEngine, RetrievalEvalCase, root_from_context_path,
+};
 
 #[derive(Debug, Deserialize)]
 struct FreshnessBenchmarkInput {
@@ -55,7 +57,14 @@ impl Tool for CodebaseEvalTool {
                             "expected_files": {
                                 "type": "array",
                                 "items": { "type": "string" }
-                            }
+                            },
+                            "intent": { "type": "string" },
+                            "active_file": { "type": "string" },
+                            "must_not_return": {
+                                "type": "array",
+                                "items": { "type": "string" }
+                            },
+                            "category": { "type": "string" }
                         }
                     }
                 },
@@ -88,17 +97,51 @@ impl Tool for CodebaseEvalTool {
         let mut out = String::new();
         out.push_str(&format!("cases_total: {}\n", report.cases_total));
         out.push_str(&format!("recall_at_5_hits: {}\n", report.recall_at_5_hits));
-        out.push_str(&format!("recall_at_5_rate_bps: {}\n", report.recall_at_5_rate_bps));
-        out.push_str(&format!("stale_context_count: {}\n", report.stale_context_count));
+        out.push_str(&format!(
+            "recall_at_5_rate_bps: {}\n",
+            report.recall_at_5_rate_bps
+        ));
+        out.push_str(&format!(
+            "stale_context_count: {}\n",
+            report.stale_context_count
+        ));
         out.push_str(&format!(
             "unauthorized_candidate_count: {}\n",
             report.unauthorized_candidate_count
         ));
+        out.push_str(&format!(
+            "forbidden_context_count: {}\n",
+            report.forbidden_context_count
+        ));
+        out.push_str(&format!("mrr_bps: {}\n", report.mrr_bps));
+        for category in &report.categories {
+            out.push_str(&format!(
+                "category:{} cases={} recall_at_5_bps={}\n",
+                category.category, category.cases_total, category.recall_at_5_rate_bps
+            ));
+        }
+        if !report.missing_expected.is_empty() {
+            out.push_str("missing_expected:\n");
+            for missing in &report.missing_expected {
+                out.push_str(&format!(
+                    "- query={} expected={:?} returned={:?}\n",
+                    missing.query, missing.expected_files, missing.returned_files
+                ));
+            }
+        }
         if let Some(bench) = params.freshness_benchmark {
-            let latency = engine.benchmark_save_to_search(&root, &bench.path, &bench.contents, &bench.query)?;
+            let latency = engine.benchmark_save_to_search(
+                &root,
+                &bench.path,
+                &bench.contents,
+                &bench.query,
+            )?;
             out.push_str(&format!("freshness_path: {}\n", latency.path));
             out.push_str(&format!("freshness_query: {}\n", latency.query));
-            out.push_str(&format!("save_to_search_ms: {}\n", latency.save_to_search_ms));
+            out.push_str(&format!(
+                "save_to_search_ms: {}\n",
+                latency.save_to_search_ms
+            ));
             out.push_str(&format!("freshness_found: {}\n", latency.found));
         }
         Ok(ToolOutput::new(out).with_title("codebase_eval"))

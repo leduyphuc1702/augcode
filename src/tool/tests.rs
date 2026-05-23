@@ -165,6 +165,7 @@ async fn test_batch_resolves_oauth_names() {
         message_id: "test".to_string(),
         tool_call_id: "test".to_string(),
         working_dir: Some(temp_dir),
+        allowed_tools: None,
         stdin_request_tx: None,
         graceful_shutdown_signal: None,
         execution_mode: ToolExecutionMode::Direct,

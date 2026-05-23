@@ -1,7 +1,9 @@
 use super::{Tool, ToolContext, ToolOutput};
 use anyhow::Result;
 use async_trait::async_trait;
-use jcode_codebase_retrieval::{CodebaseRetrievalEngine, RetrievalRequest, UnsavedBuffer, root_from_context_path};
+use jcode_codebase_retrieval::{
+    CodebaseRetrievalEngine, RetrievalRequest, UnsavedBuffer, root_from_context_path,
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -81,10 +83,8 @@ impl Tool for CodebaseSearchTool {
                 unsaved_buffers: params.unsaved_buffers,
             },
         )?;
-        Ok(ToolOutput::new(render_response(&response)).with_title(format!(
-            "codebase_search: {}",
-            params.query
-        )))
+        Ok(ToolOutput::new(render_response(&response))
+            .with_title(format!("codebase_search: {}", params.query)))
     }
 }
 
@@ -112,7 +112,10 @@ fn render_response(response: &jcode_codebase_retrieval::SearchResponse) -> Strin
         }
     }
     for omitted in &response.context_pack.omitted {
-        out.push_str(&format!("\nomitted: {} ({})\n", omitted.count, omitted.reason));
+        out.push_str(&format!(
+            "\nomitted: {} ({})\n",
+            omitted.count, omitted.reason
+        ));
     }
     out
 }

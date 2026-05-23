@@ -100,7 +100,6 @@ impl Tool for ReadFileTool {
     }
 }
 
-
 #[cfg(test)]
 #[path = "read_file_tests.rs"]
 mod tests;

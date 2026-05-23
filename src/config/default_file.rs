@@ -144,6 +144,10 @@ memory = true
 swarm = true
 # Inject timestamps into user messages and tool results sent to the model
 message_timestamps = true
+# Auto-sync local codebase indexes and inject relevant code context
+codebase_sync = true
+# Per-agent, per-task skill routing. Off by default while the MVP bakes.
+per_agent_skill_router = false
 # Update channel: "stable" (releases only) or "main" (latest commits on push)
 # Set to "main" for bleeding edge updates every time code is pushed
 update_channel = "stable"

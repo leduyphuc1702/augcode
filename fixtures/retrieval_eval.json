@@ -1,42 +1,70 @@
 [
-  {
-    "query": "how does the sync engine work",
-    "expected_files": ["crates/jcode-codebase-sync/src/lib.rs"]
-  },
-  {
-    "query": "read file tool with snapshot auth",
-    "expected_files": ["src/tool/read_file.rs"]
-  },
-  {
-    "query": "commit lineage search git history",
-    "expected_files": ["src/tool/commit_lineage_search.rs"]
-  },
-  {
-    "query": "codebase search retrieval engine",
-    "expected_files": ["crates/jcode-codebase-retrieval/src/lib.rs"]
-  },
-  {
-    "query": "query planner intent detection",
-    "expected_files": ["crates/jcode-codebase-retrieval/src/query_planner.rs"]
-  },
-  {
-    "query": "BM25 lexical index search",
-    "expected_files": ["crates/jcode-codebase-retrieval/src/lexical_index.rs"]
-  },
-  {
-    "query": "manifest store workspace",
-    "expected_files": ["crates/jcode-codebase-sync/src/lib.rs"]
-  },
-  {
-    "query": "dependency graph BFS distance",
-    "expected_files": ["crates/jcode-codebase-retrieval/src/lib.rs"]
-  },
-  {
-    "query": "sync status tool",
-    "expected_files": ["src/tool/sync_status.rs"]
-  },
-  {
-    "query": "sync drain outbox",
-    "expected_files": ["src/tool/sync_drain.rs"]
-  }
+  {"category":"understand","query":"how does CodebaseSyncEngine open workspace rescan manifest index snapshot", "expected_files":["crates/jcode-codebase-sync/src/lib.rs"]},
+  {"category":"understand","query":"IndexStore save_full apply_delta index json delta journal", "expected_files":["crates/jcode-codebase-sync/src/lib.rs"]},
+  {"category":"understand","query":"AstIndex tree sitter chunks SymbolDefinition confidence", "expected_files":["crates/jcode-codebase-sync/src/ast.rs"]},
+  {"category":"understand","query":"tree sitter parses rust symbols function_item impl_item", "expected_files":["crates/jcode-codebase-sync/src/ast.rs"]},
+  {"category":"understand","query":"tree sitter parses typescript interface class function", "expected_files":["crates/jcode-codebase-sync/src/ast.rs"]},
+  {"category":"understand","query":"tree sitter parses python async def class", "expected_files":["crates/jcode-codebase-sync/src/ast.rs"]},
+  {"category":"understand","query":"persistent lexical index data BM25 search document", "expected_files":["crates/jcode-codebase-sync/src/lib.rs"]},
+  {"category":"understand","query":"dependency graph import edges test_source contains_symbol", "expected_files":["crates/jcode-codebase-sync/src/lib.rs"]},
+  {"category":"understand","query":"workspace watcher debounce file events native notify", "expected_files":["crates/jcode-codebase-sync/src/lib.rs"]},
+  {"category":"understand","query":"snapshot token authorize path hash read_file_authorized", "expected_files":["crates/jcode-codebase-sync/src/lib.rs"]},
+
+  {"category":"retrieval","query":"CodebaseRetrievalEngine search persistent IndexSnapshot", "expected_files":["crates/jcode-codebase-retrieval/src/lib.rs"]},
+  {"category":"retrieval","query":"search_ast_chunks ast function name candidate", "expected_files":["crates/jcode-codebase-retrieval/src/lib.rs"]},
+  {"category":"retrieval","query":"HybridReranker deterministic source path graph package intent score", "expected_files":["crates/jcode-codebase-retrieval/src/lib.rs"]},
+  {"category":"retrieval","query":"dedupe_candidates path start_line end_line merge why", "expected_files":["crates/jcode-codebase-retrieval/src/lib.rs"]},
+  {"category":"retrieval","query":"compress_candidates token budget duplicate path ranges", "expected_files":["crates/jcode-codebase-retrieval/src/lib.rs"]},
+  {"category":"retrieval","query":"search_manifest_files bm25 path content current local snapshot", "expected_files":["crates/jcode-codebase-retrieval/src/lib.rs"]},
+  {"category":"retrieval","query":"search_symbols SymbolIndex symbol name definition match", "expected_files":["crates/jcode-codebase-retrieval/src/lib.rs"]},
+  {"category":"retrieval","query":"bfs_distances graph_distance_bonus active_file", "expected_files":["crates/jcode-codebase-retrieval/src/lib.rs"]},
+  {"category":"retrieval","query":"candidate_matches_disk sha256 stale fallback scan", "expected_files":["crates/jcode-codebase-retrieval/src/lib.rs"]},
+  {"category":"retrieval","query":"query planner intent detection weights SourceWeights", "expected_files":["crates/jcode-codebase-retrieval/src/query_planner.rs"]},
+  {"category":"retrieval","query":"lexical_index BM25 K1 B SearchHit", "expected_files":["crates/jcode-codebase-retrieval/src/lexical_index.rs"]},
+
+  {"category":"eval","query":"RetrievalEvalCase active_file must_not_return category", "expected_files":["crates/jcode-codebase-retrieval/src/lib.rs"]},
+  {"category":"eval","query":"RetrievalEvalReport category recall missing_expected mrr_bps", "expected_files":["crates/jcode-codebase-retrieval/src/lib.rs"]},
+  {"category":"eval","query":"codebase_eval tool recall_at_5 stale_context_count", "expected_files":["src/tool/codebase_eval.rs"]},
+  {"category":"eval","query":"eval_real_repo_recall_at_5_above_threshold Recall@5 threshold", "expected_files":["crates/jcode-codebase-retrieval/src/lib.rs"]},
+  {"category":"eval","query":"eval_real_repo_recall_at_5_above_threshold", "expected_files":["crates/jcode-codebase-retrieval/src/lib.rs"]},
+
+  {"category":"tools","query":"codebase_search tool render_response snapshot freshness", "expected_files":["src/tool/codebase_search.rs"]},
+  {"category":"tools","query":"read_file tool snapshot auth path content hash", "expected_files":["src/tool/read_file.rs"]},
+  {"category":"tools","query":"sync_status tool phase percent indexed skipped last_error", "expected_files":["src/tool/sync_status.rs"]},
+  {"category":"tools","query":"sync drain outbox ready queue", "expected_files":["src/tool/sync_drain.rs"]},
+  {"category":"tools","query":"commit lineage search git history changed files", "expected_files":["src/tool/commit_lineage_search.rs"]},
+  {"category":"tools","query":"tool registry inserts codebase_search codebase_eval sync_status", "expected_files":["src/tool/mod.rs"]},
+
+  {"category":"injection","query":"build_codebase_context_prompt code related query system reminder", "expected_files":["src/codebase_context.rs"]},
+  {"category":"injection","query":"format_context_prompt Codebase Context snapshot relevant snippets", "expected_files":["src/codebase_context.rs"]},
+  {"category":"injection","query":"Agent build_codebase_context_prompt working_dir messages", "expected_files":["src/agent/prompting.rs"]},
+  {"category":"injection","query":"src/agent/turn_loops.rs build_codebase_context_prompt system-reminder", "expected_files":["src/agent/turn_loops.rs"]},
+  {"category":"injection","query":"src/agent/turn_streaming_mpsc.rs build_codebase_context_prompt codebase_prompt", "expected_files":["src/agent/turn_streaming_mpsc.rs"]},
+  {"category":"injection","query":"src/agent/turn_streaming_broadcast.rs build_codebase_context_prompt codebase_context_prompt", "expected_files":["src/agent/turn_streaming_broadcast.rs"]},
+
+  {"category":"runtime","query":"codebase_sync_runtime start_for_session publish progress", "expected_files":["src/codebase_sync_runtime.rs"]},
+  {"category":"runtime","query":"start_for_path cold index background sync", "expected_files":["src/codebase_sync_runtime.rs"]},
+  {"category":"runtime","query":"src/tui/app/tui_lifecycle.rs codebase_sync_runtime start_for_session", "expected_files":["src/tui/app/tui_lifecycle.rs"]},
+  {"category":"runtime","query":"tui lifecycle runtime resumed session codebase sync", "expected_files":["src/tui/app/tui_lifecycle_runtime.rs"]},
+
+  {"category":"config","query":"features codebase_sync config default true", "expected_files":["crates/jcode-config-types/src/lib.rs"]},
+  {"category":"config","query":"src/config/env_overrides.rs JCODE_CODEBASE_SYNC_ENABLED codebase_sync", "expected_files":["src/config/env_overrides.rs"]},
+  {"category":"config","query":"default config file codebase_sync feature", "expected_files":["src/config/default_file.rs"]},
+  {"category":"config","query":"config tests codebase sync env", "expected_files":["src/config_tests.rs"]},
+
+  {"category":"edit","query":"on_file_change deleted renamed modified updates index snapshot", "expected_files":["crates/jcode-codebase-sync/src/lib.rs"], "active_file":"crates/jcode-codebase-sync/src/lib.rs"},
+  {"category":"edit","query":"apply_lexical_delta removes renamed added modified documents", "expected_files":["crates/jcode-codebase-sync/src/lib.rs"], "active_file":"crates/jcode-codebase-sync/src/lib.rs"},
+  {"category":"edit","query":"AstIndex apply_delta remove_path upsert_file", "expected_files":["crates/jcode-codebase-sync/src/ast.rs"], "active_file":"crates/jcode-codebase-sync/src/ast.rs"},
+  {"category":"edit","query":"range_from_snapshot_lines ast chunk full range", "expected_files":["crates/jcode-codebase-retrieval/src/lib.rs"], "active_file":"crates/jcode-codebase-retrieval/src/lib.rs"},
+
+  {"category":"test","query":"open_workspace_persists_index_snapshot_and_journal", "expected_files":["crates/jcode-codebase-sync/src/lib.rs"]},
+  {"category":"test","query":"file_change_updates_persistent_index IndexStore load validates changed auth file", "expected_files":["crates/jcode-codebase-sync/src/lib.rs"]},
+  {"category":"test","query":"hot_query_reuses_persisted_index_snapshot", "expected_files":["crates/jcode-codebase-retrieval/src/lib.rs"]},
+  {"category":"test","query":"eval_fixture_reports_recall_at_5", "expected_files":["crates/jcode-codebase-retrieval/src/lib.rs"]},
+  {"category":"test","query":"detects_code_related_queries", "expected_files":["src/codebase_context.rs"]},
+
+  {"category":"refactor","query":"remove per query rebuild overlay symbol BM25 vector", "expected_files":["crates/jcode-codebase-retrieval/src/lib.rs"]},
+  {"category":"refactor","query":"schema_version 2 cold reindex IndexStore load", "expected_files":["crates/jcode-codebase-sync/src/lib.rs"]},
+  {"category":"review","query":"forbidden_context_count unauthorized_candidate_count stale_context_count", "expected_files":["crates/jcode-codebase-retrieval/src/lib.rs"]},
+  {"category":"review","query":"generated vendor dist min js penalty", "expected_files":["crates/jcode-codebase-retrieval/src/lib.rs"]}
 ]

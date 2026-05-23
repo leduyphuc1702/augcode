@@ -2016,21 +2016,40 @@ impl App {
 
         // Check for skill invocation
         if let Some(skill_name) = SkillRegistry::parse_invocation(&input) {
-            let mut skill = self.current_skills_snapshot().get(skill_name).cloned();
+            let (mut skill, mut ambiguous_ids) = {
+                let snapshot = self.current_skills_snapshot();
+                match snapshot.lookup(skill_name) {
+                    crate::skill::SkillLookup::Found(skill) => (Some(skill.clone()), Vec::new()),
+                    crate::skill::SkillLookup::Ambiguous(skills) => (
+                        None,
+                        skills.into_iter().map(|skill| skill.id.clone()).collect(),
+                    ),
+                    crate::skill::SkillLookup::Missing => (None, Vec::new()),
+                }
+            };
 
             // Remote/minimal TUI clients may start with an empty skill snapshot, and
             // daemon-side `skill_manage reload_all` can update a different process.
             // On a slash miss, synchronously refresh from the active session working
             // directory before reporting Unknown skill so project-local skills such
             // as .jcode/skills/optimization work immediately after reload/build.
-            if skill.is_none() {
+            if skill.is_none() && ambiguous_ids.is_empty() {
                 let working_dir = self
                     .session
                     .working_dir
                     .as_deref()
                     .map(std::path::Path::new);
                 if let Ok(reloaded) = SkillRegistry::load_for_working_dir(working_dir) {
-                    skill = reloaded.get(skill_name).cloned();
+                    match reloaded.lookup(skill_name) {
+                        crate::skill::SkillLookup::Found(found) => {
+                            skill = Some(found.clone());
+                        }
+                        crate::skill::SkillLookup::Ambiguous(skills) => {
+                            ambiguous_ids =
+                                skills.into_iter().map(|skill| skill.id.clone()).collect();
+                        }
+                        crate::skill::SkillLookup::Missing => {}
+                    };
                     self.skills = std::sync::Arc::new(reloaded.clone());
                     if let Ok(mut shared) = self.registry.skills().try_write() {
                         *shared = reloaded;
@@ -2044,6 +2063,20 @@ impl App {
                 self.push_display_message(DisplayMessage {
                     role: "system".to_string(),
                     content: format!("Activated skill: {} - {}", skill.name, skill.description),
+                    tool_calls: vec![],
+                    duration_secs: None,
+                    title: None,
+                    tool_data: None,
+                });
+            } else if !ambiguous_ids.is_empty() {
+                let choices = ambiguous_ids
+                    .iter()
+                    .map(|id| format!("- {}", id))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                self.push_display_message(DisplayMessage {
+                    role: "error".to_string(),
+                    content: format!("Ambiguous skill: /{}\n{}", skill_name, choices),
                     tool_calls: vec![],
                     duration_secs: None,
                     title: None,

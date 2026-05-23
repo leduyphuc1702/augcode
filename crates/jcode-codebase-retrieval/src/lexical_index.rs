@@ -141,7 +141,10 @@ mod tests {
     fn bm25_rare_term_boosts_relevant_doc() {
         let mut index = LexicalIndex::new();
         index.add_document("common", "the quick brown fox jumps over the lazy dog");
-        index.add_document("rare", "the quick brown fox jumps over the lazy dog with aardvark");
+        index.add_document(
+            "rare",
+            "the quick brown fox jumps over the lazy dog with aardvark",
+        );
         index.add_document("other", "the quick brown fox jumps over the lazy dog again");
         let hits = index.search("aardvark", 10);
         assert_eq!(hits.len(), 1);

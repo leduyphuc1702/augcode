@@ -11,7 +11,10 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-const SCHEMA_VERSION: u32 = 1;
+mod ast;
+pub use ast::{AstChunk, AstIndex};
+
+const SCHEMA_VERSION: u32 = 2;
 const MAX_TEXT_FILE_BYTES: u64 = 1_000_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -138,6 +141,16 @@ pub struct SymbolDefinition {
     pub name: String,
     pub kind: String,
     pub start_line: usize,
+    #[serde(default)]
+    pub end_line: usize,
+    #[serde(default)]
+    pub signature: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    #[serde(default)]
+    pub confidence: u8,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -155,6 +168,49 @@ pub struct DependencyEdge {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DependencyGraph {
     pub edges: Vec<DependencyEdge>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LexicalDocument {
+    pub path: String,
+    pub content_hash: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LexicalHit {
+    pub path: String,
+    pub content_hash: String,
+    pub score: f32,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct LexicalIndexData {
+    inverted: BTreeMap<String, BTreeMap<String, usize>>,
+    doc_lengths: BTreeMap<String, usize>,
+    docs: BTreeMap<String, LexicalDocument>,
+    avg_dl: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct IndexSnapshot {
+    pub schema_version: u32,
+    pub manifest: Manifest,
+    pub overlay: LocalOverlayIndex,
+    pub lexical: LexicalIndexData,
+    pub symbols: SymbolIndex,
+    pub graph: DependencyGraph,
+    #[serde(default)]
+    pub ast_chunks: AstIndex,
+    pub indexed_files: usize,
+    pub skipped_files: usize,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct IndexDeltaJournalEntry {
+    pub updated_at: DateTime<Utc>,
+    pub delta: Delta,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -190,7 +246,10 @@ impl SnapshotTokenPayload {
             .get(path)
             .map(|expected| expected == content_hash)
             .unwrap_or(false)
-            && self.allowed_content_hashes.iter().any(|hash| hash == content_hash)
+            && self
+                .allowed_content_hashes
+                .iter()
+                .any(|hash| hash == content_hash)
     }
 }
 
@@ -281,7 +340,11 @@ impl SyncOutbox {
         Ok(())
     }
 
-    pub fn status_summary(&self, blobs_total: usize, committed_deltas: usize) -> Result<SyncStatusSummary> {
+    pub fn status_summary(
+        &self,
+        blobs_total: usize,
+        committed_deltas: usize,
+    ) -> Result<SyncStatusSummary> {
         let scheduler = self.load()?;
         let (queue_hot, queue_warm, queue_bulk, queue_shadow) = scheduler.priority_depths();
         Ok(SyncStatusSummary {
@@ -357,11 +420,20 @@ impl SyncQueueScheduler {
     }
 
     pub fn priority_depths(&self) -> (usize, usize, usize, usize) {
-        (self.hot.len(), self.warm.len(), self.bulk.len(), self.shadow.len())
+        (
+            self.hot.len(),
+            self.warm.len(),
+            self.bulk.len(),
+            self.shadow.len(),
+        )
     }
 
     fn extend_not_ready(&mut self, scheduler: SyncQueueScheduler) {
-        for job in scheduler.into_jobs().into_iter().filter(|job| job.retry_after_ms > 0) {
+        for job in scheduler
+            .into_jobs()
+            .into_iter()
+            .filter(|job| job.retry_after_ms > 0)
+        {
             self.push(job);
         }
     }
@@ -462,7 +534,12 @@ pub struct CommitSearchDocument {
 pub fn harvest_commit_lineage(root: &Path, max_count: usize) -> Result<Vec<CommitSearchDocument>> {
     let git_state = read_git_state(root);
     let output = std::process::Command::new("git")
-        .args(["log", &format!("-{}", max_count), "--name-only", "--format=%H%x1f%aI%x1f%s"])
+        .args([
+            "log",
+            &format!("-{}", max_count),
+            "--name-only",
+            "--format=%H%x1f%aI%x1f%s",
+        ])
         .current_dir(root)
         .output()?;
     if !output.status.success() {
@@ -531,34 +608,29 @@ pub struct WorkspaceStatus {
     pub worktree_root: Option<String>,
     pub files_total: usize,
     pub last_manifest_at: DateTime<Utc>,
+    #[serde(default = "default_sync_phase")]
+    pub phase: String,
+    #[serde(default)]
+    pub percent: u8,
+    #[serde(default)]
+    pub indexed_files: usize,
+    #[serde(default)]
+    pub skipped_files: usize,
+    #[serde(default)]
+    pub last_error: Option<String>,
+    #[serde(default)]
+    pub last_updated_at: Option<DateTime<Utc>>,
     pub file_statuses: Vec<FileSyncStatus>,
     pub warnings: Vec<String>,
 }
 
+fn default_sync_phase() -> String {
+    "indexed".to_string()
+}
+
 impl DependencyGraph {
     pub fn rebuild(root: &Path, manifest: &Manifest) -> Result<Self> {
-        let mut edges = Vec::new();
-        let paths: HashSet<_> = manifest.files.keys().cloned().collect();
-        for path in manifest.files.keys() {
-            if let Some(source) = test_source_path(path) {
-                if paths.contains(&source) {
-                    edges.push(DependencyEdge {
-                        from: path.clone(),
-                        to: source,
-                        kind: "test_source".to_string(),
-                    });
-                }
-            }
-            let text = fs::read_to_string(root.join(path))?;
-            for target in extract_import_targets(path, &text, &paths) {
-                edges.push(DependencyEdge {
-                    from: path.clone(),
-                    to: target,
-                    kind: "import".to_string(),
-                });
-            }
-        }
-        Ok(Self { edges })
+        build_dependency_graph(root, manifest)
     }
 }
 
@@ -577,12 +649,59 @@ impl SymbolIndex {
         let mut hits: Vec<_> = self
             .symbols
             .iter()
-            .filter(|symbol| score_text(&format!("{} {} {}", symbol.path, symbol.name, symbol.kind), &terms) > 0)
+            .filter(|symbol| {
+                score_text(
+                    &format!(
+                        "{} {} {} {} {}",
+                        symbol.path,
+                        symbol.name,
+                        symbol.kind,
+                        symbol.signature,
+                        symbol.parent.as_deref().unwrap_or_default()
+                    ),
+                    &terms,
+                ) > 0
+            })
             .cloned()
             .collect();
-        hits.sort_by(|a, b| a.path.cmp(&b.path).then_with(|| a.start_line.cmp(&b.start_line)));
+        hits.sort_by(|a, b| {
+            a.path
+                .cmp(&b.path)
+                .then_with(|| a.start_line.cmp(&b.start_line))
+        });
         hits.truncate(limit);
         hits
+    }
+
+    pub fn apply_delta(&mut self, root: &Path, delta: &Delta) -> Result<()> {
+        for path in &delta.removed {
+            self.remove_path(path);
+        }
+        for rename in &delta.renamed {
+            self.remove_path(&rename.from);
+        }
+        for entry in delta.added.iter().chain(delta.modified.iter()) {
+            self.upsert_file(root, entry)?;
+        }
+        for rename in &delta.renamed {
+            self.upsert_file(root, &rename.entry)?;
+        }
+        Ok(())
+    }
+
+    pub fn upsert_file(&mut self, root: &Path, entry: &FileEntry) -> Result<()> {
+        let text = fs::read_to_string(root.join(&entry.path))?;
+        self.upsert_text(entry, &text);
+        Ok(())
+    }
+
+    pub fn upsert_text(&mut self, entry: &FileEntry, text: &str) {
+        self.remove_path(&entry.path);
+        self.symbols.extend(extract_symbols(entry, text));
+    }
+
+    pub fn remove_path(&mut self, path: &str) {
+        self.symbols.retain(|symbol| symbol.path != path);
     }
 }
 
@@ -592,7 +711,12 @@ impl ExactVectorIndex {
             .chunks_by_path
             .values()
             .flat_map(|chunks| chunks.iter())
-            .map(|chunk| (chunk.clone(), embed_text(&format!("{}\n{}", chunk.path, chunk.text))))
+            .map(|chunk| {
+                (
+                    chunk.clone(),
+                    embed_text(&format!("{}\n{}", chunk.path, chunk.text)),
+                )
+            })
             .collect();
         Self { entries }
     }
@@ -618,6 +742,101 @@ impl ExactVectorIndex {
         });
         hits.truncate(limit);
         hits
+    }
+}
+
+impl LexicalIndexData {
+    pub fn add_document(&mut self, path: &str, content_hash: &str, text: &str) {
+        self.remove_document(path);
+        let doc_text = format!("{} {} {}", path, path.replace('/', " "), text);
+        let terms = query_terms(&doc_text);
+        let mut local_tf = BTreeMap::<String, usize>::new();
+        for term in &terms {
+            *local_tf.entry(term.clone()).or_default() += 1;
+        }
+        for (term, tf) in local_tf {
+            self.inverted
+                .entry(term)
+                .or_default()
+                .insert(path.to_string(), tf);
+        }
+        self.doc_lengths.insert(path.to_string(), terms.len());
+        self.docs.insert(
+            path.to_string(),
+            LexicalDocument {
+                path: path.to_string(),
+                content_hash: content_hash.to_string(),
+                text: text.to_string(),
+            },
+        );
+        self.recompute_avg_dl();
+    }
+
+    pub fn remove_document(&mut self, path: &str) {
+        for postings in self.inverted.values_mut() {
+            postings.remove(path);
+        }
+        self.inverted.retain(|_, postings| !postings.is_empty());
+        self.doc_lengths.remove(path);
+        self.docs.remove(path);
+        self.recompute_avg_dl();
+    }
+
+    pub fn document(&self, path: &str) -> Option<&LexicalDocument> {
+        self.docs.get(path)
+    }
+
+    pub fn search(&self, query: &str, top_k: usize) -> Vec<LexicalHit> {
+        let query_terms = query_terms(query);
+        if query_terms.is_empty() {
+            return Vec::new();
+        }
+        let n = self.doc_lengths.len() as f32;
+        let avg_dl = self.avg_dl.max(1.0);
+        let mut scores = BTreeMap::<String, f32>::new();
+        for term in query_terms {
+            let Some(postings) = self.inverted.get(&term) else {
+                continue;
+            };
+            let df = postings.len() as f32;
+            let idf = (1.0 + (n - df + 0.5) / (df + 0.5)).ln();
+            for (path, tf) in postings {
+                let dl = *self.doc_lengths.get(path).unwrap_or(&0) as f32;
+                let tf_f = *tf as f32;
+                let denom = tf_f + 1.2 * (1.0 - 0.75 + 0.75 * dl / avg_dl);
+                let bm25 = idf * (tf_f * 2.2) / denom.max(1e-6);
+                *scores.entry(path.clone()).or_default() += bm25;
+            }
+        }
+        let mut hits: Vec<_> = scores
+            .into_iter()
+            .filter(|(_, score)| *score > 0.0)
+            .filter_map(|(path, score)| {
+                let doc = self.docs.get(&path)?;
+                Some(LexicalHit {
+                    path,
+                    content_hash: doc.content_hash.clone(),
+                    score,
+                })
+            })
+            .collect();
+        hits.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.path.cmp(&b.path))
+        });
+        hits.truncate(top_k);
+        hits
+    }
+
+    fn recompute_avg_dl(&mut self) {
+        if self.doc_lengths.is_empty() {
+            self.avg_dl = 0.0;
+            return;
+        }
+        let total: usize = self.doc_lengths.values().sum();
+        self.avg_dl = total as f32 / self.doc_lengths.len() as f32;
     }
 }
 
@@ -671,9 +890,13 @@ impl LocalOverlayIndex {
 
     pub fn upsert_file(&mut self, root: &Path, entry: &FileEntry) -> Result<()> {
         let text = fs::read_to_string(root.join(&entry.path))?;
-        self.chunks_by_path
-            .insert(entry.path.clone(), chunk_text(entry, &text));
+        self.upsert_text(entry, &text);
         Ok(())
+    }
+
+    pub fn upsert_text(&mut self, entry: &FileEntry, text: &str) {
+        self.chunks_by_path
+            .insert(entry.path.clone(), chunk_text(entry, text));
     }
 
     pub fn remove(&mut self, path: &str) {
@@ -682,6 +905,14 @@ impl LocalOverlayIndex {
 
     pub fn search(&self, query: &str, limit: usize) -> Vec<OverlayHit> {
         search_chunks(&self.chunks_by_path, query, limit)
+    }
+
+    pub fn chunk_for_line(&self, path: &str, line: usize) -> Option<&OverlayChunk> {
+        self.chunks_by_path
+            .get(path)?
+            .iter()
+            .find(|chunk| chunk.start_line <= line && line <= chunk.end_line)
+            .or_else(|| self.chunks_by_path.get(path)?.first())
     }
 }
 
@@ -704,7 +935,8 @@ impl IgnoreRules {
         let path = root.join(".jcodeignore");
         let mut contents = String::new();
         let jcodeignore = if path.exists() {
-            contents = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+            contents =
+                fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
             let mut builder = GitignoreBuilder::new(&root);
             for line in contents.lines() {
                 builder.add_line(Some(path.clone()), line)?;
@@ -815,7 +1047,27 @@ impl CodebaseSyncEngine {
         let next = patch_manifest(&previous, partial, root, &rules)?;
         let delta = diff_manifest(Some(&previous), &next, DeltaReason::FileWatch);
         self.store.save(root, &next)?;
-        self.store.save_status(root, &status_from_manifest(&next, Vec::new()))?;
+        let skipped_files = self
+            .store
+            .load_status(root)?
+            .map(|status| status.skipped_files)
+            .unwrap_or(0);
+        let index_error = IndexStore::from_manifest_store(&self.store)
+            .apply_delta(root, &next, &delta, skipped_files)
+            .err()
+            .map(|err| err.to_string());
+        self.store.save_status(
+            root,
+            &status_from_manifest_with_progress(
+                &next,
+                Vec::new(),
+                "indexed",
+                100,
+                next.files.len(),
+                skipped_files,
+                index_error,
+            ),
+        )?;
         Ok((next, delta))
     }
 
@@ -827,7 +1079,22 @@ impl CodebaseSyncEngine {
         let manifest = build_manifest(root, &rules, scan.files)?;
         let delta = diff_manifest(previous.as_ref(), &manifest, reason);
         self.store.save(root, &manifest)?;
-        self.store.save_status(root, &status_from_manifest(&manifest, warnings))?;
+        let index_error = IndexStore::from_manifest_store(&self.store)
+            .save_full(root, &manifest, scan.ignored_count, &delta)
+            .err()
+            .map(|err| err.to_string());
+        self.store.save_status(
+            root,
+            &status_from_manifest_with_progress(
+                &manifest,
+                warnings,
+                "indexed",
+                100,
+                manifest.files.len(),
+                scan.ignored_count,
+                index_error,
+            ),
+        )?;
         Ok((manifest, delta))
     }
 
@@ -842,7 +1109,19 @@ impl CodebaseSyncEngine {
     }
 
     pub fn snapshot_token(&self, root: &Path) -> Result<Option<SnapshotTokenPayload>> {
-        Ok(self.store.load(root)?.as_ref().map(SnapshotTokenPayload::from_manifest))
+        Ok(self
+            .store
+            .load(root)?
+            .as_ref()
+            .map(SnapshotTokenPayload::from_manifest))
+    }
+
+    pub fn manifest(&self, root: &Path) -> Result<Option<Manifest>> {
+        self.store.load(root)
+    }
+
+    pub fn index_snapshot(&self, root: &Path) -> Result<Option<IndexSnapshot>> {
+        IndexStore::from_manifest_store(&self.store).load(root)
     }
 
     pub fn read_file_authorized(
@@ -912,13 +1191,14 @@ impl CodebaseSyncEngine {
             }
         });
         let native_watcher = if native {
-            let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-                if let Ok(event) = res {
-                    for path in event.paths {
-                        let _ = native_event_tx.send(path);
+            let mut watcher =
+                notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+                    if let Ok(event) = res {
+                        for path in event.paths {
+                            let _ = native_event_tx.send(path);
+                        }
                     }
-                }
-            })?;
+                })?;
             watcher.watch(&root, RecursiveMode::Recursive)?;
             Some(watcher)
         } else {
@@ -981,20 +1261,215 @@ impl ManifestStore {
     fn manifest_path_for_manifest(&self, root: &Path, manifest: &Manifest) -> PathBuf {
         self.base_dir
             .join(workspace_id(root))
-            .join(branch_key(manifest.branch.as_deref(), manifest.head_sha.as_deref()))
+            .join(branch_key(
+                manifest.branch.as_deref(),
+                manifest.head_sha.as_deref(),
+            ))
             .join("manifest.json")
     }
 
     fn manifest_path_for_state(&self, root: &Path, git_state: &GitState) -> PathBuf {
         self.base_dir
             .join(workspace_id(root))
-            .join(branch_key(git_state.branch.as_deref(), git_state.head_sha.as_deref()))
+            .join(branch_key(
+                git_state.branch.as_deref(),
+                git_state.head_sha.as_deref(),
+            ))
             .join("manifest.json")
     }
 
     fn status_path(&self, root: &Path) -> PathBuf {
         self.manifest_path(root).with_file_name("status.json")
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct IndexStore {
+    base_dir: PathBuf,
+}
+
+impl IndexStore {
+    pub fn default_store() -> Result<Self> {
+        Ok(Self {
+            base_dir: jcode_storage::jcode_dir()?.join("codebase"),
+        })
+    }
+
+    pub fn new(base_dir: PathBuf) -> Self {
+        Self { base_dir }
+    }
+
+    pub fn from_manifest_store(store: &ManifestStore) -> Self {
+        Self {
+            base_dir: store.base_dir.clone(),
+        }
+    }
+
+    pub fn load(&self, root: &Path) -> Result<Option<IndexSnapshot>> {
+        let path = self.snapshot_path(root);
+        if !path.exists() {
+            return Ok(None);
+        }
+        let snapshot: IndexSnapshot = jcode_storage::read_json(&path)?;
+        if snapshot.schema_version != SCHEMA_VERSION {
+            return Ok(None);
+        }
+        Ok(Some(snapshot))
+    }
+
+    pub fn save_full(
+        &self,
+        root: &Path,
+        manifest: &Manifest,
+        skipped_files: usize,
+        delta: &Delta,
+    ) -> Result<IndexSnapshot> {
+        let snapshot = build_index_snapshot(root, manifest, skipped_files)?;
+        self.save_snapshot(root, &snapshot)?;
+        self.append_delta(root, delta)?;
+        Ok(snapshot)
+    }
+
+    pub fn apply_delta(
+        &self,
+        root: &Path,
+        manifest: &Manifest,
+        delta: &Delta,
+        skipped_files: usize,
+    ) -> Result<IndexSnapshot> {
+        let mut snapshot = match self.load(root)? {
+            Some(snapshot) if snapshot.manifest.workspace_id == manifest.workspace_id => snapshot,
+            _ => return self.save_full(root, manifest, skipped_files, delta),
+        };
+        snapshot.manifest = manifest.clone();
+        snapshot.overlay.apply_delta(root, delta)?;
+        snapshot.symbols.apply_delta(root, delta)?;
+        snapshot.ast_chunks.apply_delta(root, delta)?;
+        apply_lexical_delta(root, &mut snapshot.lexical, delta)?;
+        snapshot.graph = build_dependency_graph(root, manifest)?;
+        snapshot.indexed_files = manifest.files.len();
+        snapshot.skipped_files = skipped_files;
+        snapshot.updated_at = Utc::now();
+        self.save_snapshot(root, &snapshot)?;
+        self.append_delta(root, delta)?;
+        Ok(snapshot)
+    }
+
+    pub fn snapshot_path(&self, root: &Path) -> PathBuf {
+        let git_state = read_git_state(root);
+        self.base_dir
+            .join(workspace_id(root))
+            .join(branch_key(
+                git_state.branch.as_deref(),
+                git_state.head_sha.as_deref(),
+            ))
+            .join("index.json")
+    }
+
+    pub fn delta_journal_path(&self, root: &Path) -> PathBuf {
+        self.snapshot_path(root).with_file_name("index-delta.jsonl")
+    }
+
+    fn save_snapshot(&self, root: &Path, snapshot: &IndexSnapshot) -> Result<()> {
+        jcode_storage::write_json(&self.snapshot_path(root), snapshot)
+    }
+
+    fn append_delta(&self, root: &Path, delta: &Delta) -> Result<()> {
+        jcode_storage::append_json_line_fast(
+            &self.delta_journal_path(root),
+            &IndexDeltaJournalEntry {
+                updated_at: Utc::now(),
+                delta: delta.clone(),
+            },
+        )
+    }
+}
+
+fn build_index_snapshot(
+    root: &Path,
+    manifest: &Manifest,
+    skipped_files: usize,
+) -> Result<IndexSnapshot> {
+    let mut overlay = LocalOverlayIndex::default();
+    let mut symbols = SymbolIndex::default();
+    let mut ast_chunks = AstIndex::default();
+    let mut lexical = LexicalIndexData::default();
+    for entry in manifest.files.values() {
+        let text = fs::read_to_string(root.join(&entry.path))
+            .with_context(|| format!("read {}", root.join(&entry.path).display()))?;
+        overlay.upsert_text(entry, &text);
+        symbols.upsert_text(entry, &text);
+        ast_chunks.upsert_text(entry, &text);
+        lexical.add_document(&entry.path, &entry.content_hash, &text);
+    }
+    Ok(IndexSnapshot {
+        schema_version: SCHEMA_VERSION,
+        graph: build_dependency_graph(root, manifest)?,
+        manifest: manifest.clone(),
+        overlay,
+        lexical,
+        symbols,
+        ast_chunks,
+        indexed_files: manifest.files.len(),
+        skipped_files,
+        updated_at: Utc::now(),
+    })
+}
+
+fn apply_lexical_delta(root: &Path, lexical: &mut LexicalIndexData, delta: &Delta) -> Result<()> {
+    for path in &delta.removed {
+        lexical.remove_document(path);
+    }
+    for rename in &delta.renamed {
+        lexical.remove_document(&rename.from);
+    }
+    for entry in delta.added.iter().chain(delta.modified.iter()) {
+        let text = fs::read_to_string(root.join(&entry.path))
+            .with_context(|| format!("read {}", root.join(&entry.path).display()))?;
+        lexical.add_document(&entry.path, &entry.content_hash, &text);
+    }
+    for rename in &delta.renamed {
+        let text = fs::read_to_string(root.join(&rename.entry.path))
+            .with_context(|| format!("read {}", root.join(&rename.entry.path).display()))?;
+        lexical.add_document(&rename.entry.path, &rename.entry.content_hash, &text);
+    }
+    Ok(())
+}
+
+fn build_dependency_graph(root: &Path, manifest: &Manifest) -> Result<DependencyGraph> {
+    let mut edges = Vec::new();
+    let paths: HashSet<_> = manifest.files.keys().cloned().collect();
+    for path in manifest.files.keys() {
+        if let Some(source) = test_source_path(path)
+            && paths.contains(&source)
+        {
+            edges.push(DependencyEdge {
+                from: path.clone(),
+                to: source,
+                kind: "test_source".to_string(),
+            });
+        }
+        let text = fs::read_to_string(root.join(path))?;
+        if let Some(entry) = manifest.files.get(path) {
+            let mut ast_index = AstIndex::default();
+            ast_index.upsert_text(entry, &text);
+            for (from, to) in ast::containment_edges(&ast_index.chunks) {
+                edges.push(DependencyEdge {
+                    from,
+                    to,
+                    kind: "contains_symbol".to_string(),
+                });
+            }
+        }
+        for target in extract_import_targets(path, &text, &paths) {
+            edges.push(DependencyEdge {
+                from: path.clone(),
+                to: target,
+                kind: "import".to_string(),
+            });
+        }
+    }
+    Ok(DependencyGraph { edges })
 }
 
 pub fn discover_filter_hash(root: &Path, rules: &IgnoreRules) -> Result<ScanResult> {
@@ -1023,7 +1498,10 @@ pub fn discover_filter_hash(root: &Path, rules: &IgnoreRules) -> Result<ScanResu
             ignored_count += 1;
             continue;
         };
-        if rules.is_ignored(relative_path, item.file_type().map(|t| t.is_dir()).unwrap_or(false)) {
+        if rules.is_ignored(
+            relative_path,
+            item.file_type().map(|t| t.is_dir()).unwrap_or(false),
+        ) {
             ignored_count += 1;
             continue;
         }
@@ -1083,8 +1561,12 @@ pub fn hash_changed_paths(
     let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let mut changed = BTreeMap::new();
     for path in paths {
-        let absolute = if path.is_absolute() { path.clone() } else { root.join(path) };
-        let absolute = absolute.canonicalize().unwrap_or(absolute);
+        let absolute = if path.is_absolute() {
+            path.clone()
+        } else {
+            root.join(path)
+        };
+        let absolute = canonicalize_existing_or_parent(&absolute);
         let Ok(relative) = absolute.strip_prefix(&root) else {
             continue;
         };
@@ -1093,7 +1575,10 @@ pub fn hash_changed_paths(
             changed.insert(normalized, None);
             continue;
         }
-        if rules.is_ignored(relative, absolute.is_dir()) || should_skip_path(relative) || !absolute.is_file() {
+        if rules.is_ignored(relative, absolute.is_dir())
+            || should_skip_path(relative)
+            || !absolute.is_file()
+        {
             changed.insert(normalized, None);
             continue;
         }
@@ -1214,9 +1699,10 @@ fn scan_one_file(path: &Path, relative_path: &Path) -> Result<Option<FileEntry>>
 fn chunk_text(entry: &FileEntry, text: &str) -> Vec<OverlayChunk> {
     let symbol_chunks = match entry.language.as_deref() {
         Some("rust") => chunk_symbols(entry, text, is_rust_symbol_start),
-        Some("typescript") | Some("typescriptreact") | Some("javascript") | Some("javascriptreact") => {
-            chunk_symbols(entry, text, is_js_symbol_start)
-        }
+        Some("typescript")
+        | Some("typescriptreact")
+        | Some("javascript")
+        | Some("javascriptreact") => chunk_symbols(entry, text, is_js_symbol_start),
         Some("python") => chunk_symbols(entry, text, is_python_symbol_start),
         _ => Vec::new(),
     };
@@ -1250,7 +1736,11 @@ fn chunk_fixed_lines(entry: &FileEntry, text: &str) -> Vec<OverlayChunk> {
         .collect()
 }
 
-fn chunk_symbols(entry: &FileEntry, text: &str, is_symbol_start: fn(&str) -> bool) -> Vec<OverlayChunk> {
+fn chunk_symbols(
+    entry: &FileEntry,
+    text: &str,
+    is_symbol_start: fn(&str) -> bool,
+) -> Vec<OverlayChunk> {
     let lines: Vec<_> = text.lines().collect();
     let starts: Vec<_> = lines
         .iter()
@@ -1305,16 +1795,29 @@ fn is_python_symbol_start(line: &str) -> bool {
 }
 
 fn extract_symbols(entry: &FileEntry, text: &str) -> Vec<SymbolDefinition> {
+    if let Some(symbols) = ast::extract_symbols(entry, text) {
+        return symbols;
+    }
+    extract_regex_symbols(entry, text)
+}
+
+fn extract_regex_symbols(entry: &FileEntry, text: &str) -> Vec<SymbolDefinition> {
     text.lines()
         .enumerate()
         .filter_map(|(index, line)| extract_symbol_line(entry, line.trim_start(), index + 1))
         .collect()
 }
 
-fn extract_symbol_line(entry: &FileEntry, line: &str, start_line: usize) -> Option<SymbolDefinition> {
+fn extract_symbol_line(
+    entry: &FileEntry,
+    line: &str,
+    start_line: usize,
+) -> Option<SymbolDefinition> {
     let (kind, rest) = match entry.language.as_deref()? {
         "rust" => extract_rust_symbol(line)?,
-        "typescript" | "typescriptreact" | "javascript" | "javascriptreact" => extract_js_symbol(line)?,
+        "typescript" | "typescriptreact" | "javascript" | "javascriptreact" => {
+            extract_js_symbol(line)?
+        }
         "python" => extract_python_symbol(line)?,
         _ => return None,
     };
@@ -1323,12 +1826,24 @@ fn extract_symbol_line(entry: &FileEntry, line: &str, start_line: usize) -> Opti
         name: symbol_name(rest)?,
         kind: kind.to_string(),
         start_line,
+        end_line: start_line,
+        signature: line.to_string(),
+        parent: None,
+        language: entry.language.clone(),
+        confidence: 60,
     })
 }
 
 fn extract_rust_symbol(line: &str) -> Option<(&'static str, &str)> {
     let line = line.strip_prefix("pub ").unwrap_or(line);
-    for (prefix, kind) in [("fn ", "function"), ("async fn ", "function"), ("struct ", "struct"), ("enum ", "enum"), ("trait ", "trait"), ("impl ", "impl")] {
+    for (prefix, kind) in [
+        ("fn ", "function"),
+        ("async fn ", "function"),
+        ("struct ", "struct"),
+        ("enum ", "enum"),
+        ("trait ", "trait"),
+        ("impl ", "impl"),
+    ] {
         if let Some(rest) = line.strip_prefix(prefix) {
             return Some((kind, rest));
         }
@@ -1338,7 +1853,14 @@ fn extract_rust_symbol(line: &str) -> Option<(&'static str, &str)> {
 
 fn extract_js_symbol(line: &str) -> Option<(&'static str, &str)> {
     let line = line.strip_prefix("export ").unwrap_or(line);
-    for (prefix, kind) in [("function ", "function"), ("async function ", "function"), ("class ", "class"), ("interface ", "interface"), ("type ", "type"), ("const ", "function")] {
+    for (prefix, kind) in [
+        ("function ", "function"),
+        ("async function ", "function"),
+        ("class ", "class"),
+        ("interface ", "interface"),
+        ("type ", "type"),
+        ("const ", "function"),
+    ] {
         if let Some(rest) = line.strip_prefix(prefix) {
             return Some((kind, rest));
         }
@@ -1347,7 +1869,11 @@ fn extract_js_symbol(line: &str) -> Option<(&'static str, &str)> {
 }
 
 fn extract_python_symbol(line: &str) -> Option<(&'static str, &str)> {
-    for (prefix, kind) in [("def ", "function"), ("async def ", "function"), ("class ", "class")] {
+    for (prefix, kind) in [
+        ("def ", "function"),
+        ("async def ", "function"),
+        ("class ", "class"),
+    ] {
         if let Some(rest) = line.strip_prefix(prefix) {
             return Some((kind, rest));
         }
@@ -1379,8 +1905,24 @@ fn test_source_path(path: &str) -> Option<String> {
 fn extract_import_targets(path: &str, text: &str, paths: &HashSet<String>) -> Vec<String> {
     let source_ext = Path::new(path).extension().and_then(|value| value.to_str());
     let base = Path::new(path).parent().unwrap_or_else(|| Path::new(""));
-    text.lines()
-        .filter_map(|line| extract_import_path(line.trim()))
+    let entry = FileEntry {
+        path: path.to_string(),
+        content_hash: String::new(),
+        size_bytes: text.len() as u64,
+        language: language_for_path(Path::new(path)),
+        is_generated: is_generated_path(Path::new(path)),
+    };
+    let ast_imports = ast::extract_import_paths(&entry, text).unwrap_or_default();
+    let import_paths: Vec<_> = if ast_imports.is_empty() {
+        text.lines()
+            .filter_map(|line| extract_import_path(line.trim()).map(str::to_string))
+            .collect()
+    } else {
+        ast_imports
+    };
+    import_paths
+        .iter()
+        .map(String::as_str)
         .filter_map(|import| resolve_relative_import(base, import, source_ext, paths))
         .collect()
 }
@@ -1431,8 +1973,14 @@ fn resolve_relative_import(
                 .iter()
                 .find(|candidate| {
                     Path::new(candidate).parent() == Some(base)
-                        && Path::new(candidate).file_stem().and_then(|value| value.to_str()) == Some(stem)
-                        && Path::new(candidate).extension().and_then(|value| value.to_str()) == source_ext
+                        && Path::new(candidate)
+                            .file_stem()
+                            .and_then(|value| value.to_str())
+                            == Some(stem)
+                        && Path::new(candidate)
+                            .extension()
+                            .and_then(|value| value.to_str())
+                            == source_ext
                 })
                 .cloned()
         })
@@ -1450,7 +1998,10 @@ fn query_terms(query: &str) -> Vec<String> {
 
 fn score_text(text: &str, terms: &[String]) -> usize {
     let haystack = text.to_lowercase();
-    terms.iter().filter(|term| haystack.contains(term.as_str())).count()
+    terms
+        .iter()
+        .filter(|term| haystack.contains(term.as_str()))
+        .count()
 }
 
 fn pop_ready(queue: &mut VecDeque<SyncQueueJob>) -> Option<SyncQueueJob> {
@@ -1465,7 +2016,9 @@ fn retry_delay_ms(attempts: u32) -> u64 {
 fn embed_text(text: &str) -> Vec<f32> {
     let mut vector = vec![0.0; 64];
     for term in query_terms(text) {
-        let index = term.bytes().fold(0usize, |acc, byte| acc.wrapping_mul(31).wrapping_add(byte as usize)) % vector.len();
+        let index = term.bytes().fold(0usize, |acc, byte| {
+            acc.wrapping_mul(31).wrapping_add(byte as usize)
+        }) % vector.len();
         vector[index] += 1.0;
     }
     vector
@@ -1486,7 +2039,11 @@ fn cosine_similarity(left: &[f32], right: &[f32]) -> f32 {
     dot / (left_norm.sqrt() * right_norm.sqrt())
 }
 
-fn search_chunks(chunks_by_path: &BTreeMap<String, Vec<OverlayChunk>>, query: &str, limit: usize) -> Vec<OverlayHit> {
+fn search_chunks(
+    chunks_by_path: &BTreeMap<String, Vec<OverlayChunk>>,
+    query: &str,
+    limit: usize,
+) -> Vec<OverlayHit> {
     let terms = query_terms(query);
     let mut hits = Vec::new();
     for chunks in chunks_by_path.values() {
@@ -1500,12 +2057,36 @@ fn search_chunks(chunks_by_path: &BTreeMap<String, Vec<OverlayChunk>>, query: &s
             }
         }
     }
-    hits.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.chunk.path.cmp(&b.chunk.path)));
+    hits.sort_by(|a, b| {
+        b.score
+            .cmp(&a.score)
+            .then_with(|| a.chunk.path.cmp(&b.chunk.path))
+    });
     hits.truncate(limit);
     hits
 }
 
 fn status_from_manifest(manifest: &Manifest, warnings: Vec<String>) -> WorkspaceStatus {
+    status_from_manifest_with_progress(
+        manifest,
+        warnings,
+        "indexed",
+        100,
+        manifest.files.len(),
+        0,
+        None,
+    )
+}
+
+fn status_from_manifest_with_progress(
+    manifest: &Manifest,
+    warnings: Vec<String>,
+    phase: &str,
+    percent: u8,
+    indexed_files: usize,
+    skipped_files: usize,
+    last_error: Option<String>,
+) -> WorkspaceStatus {
     WorkspaceStatus {
         workspace_id: manifest.workspace_id.clone(),
         branch: manifest.branch.clone(),
@@ -1513,6 +2094,12 @@ fn status_from_manifest(manifest: &Manifest, warnings: Vec<String>) -> Workspace
         worktree_root: manifest.worktree_root.clone(),
         files_total: manifest.files.len(),
         last_manifest_at: manifest.created_at,
+        phase: phase.to_string(),
+        percent,
+        indexed_files,
+        skipped_files,
+        last_error,
+        last_updated_at: Some(Utc::now()),
         file_statuses: manifest
             .files
             .values()
@@ -1552,9 +2139,28 @@ fn normalize_import_path(path: &Path) -> String {
         .join("/")
 }
 
+fn canonicalize_existing_or_parent(path: &Path) -> PathBuf {
+    if let Ok(canonical) = path.canonicalize() {
+        return canonical;
+    }
+    let Some(parent) = path.parent() else {
+        return path.to_path_buf();
+    };
+    let Ok(parent) = parent.canonicalize() else {
+        return path.to_path_buf();
+    };
+    match path.file_name() {
+        Some(name) => parent.join(name),
+        None => parent,
+    }
+}
+
 fn should_skip_path(path: &Path) -> bool {
     let normalized = normalize_relative_path(path);
-    let name = path.file_name().and_then(|v| v.to_str()).unwrap_or_default();
+    let name = path
+        .file_name()
+        .and_then(|v| v.to_str())
+        .unwrap_or_default();
     let default_dirs: HashSet<&str> = [
         ".git",
         ".jcode",
@@ -1570,9 +2176,10 @@ fn should_skip_path(path: &Path) -> bool {
     ]
     .into_iter()
     .collect();
-    if path.components().any(|part| {
-        default_dirs.contains(part.as_os_str().to_string_lossy().as_ref())
-    }) {
+    if path
+        .components()
+        .any(|part| default_dirs.contains(part.as_os_str().to_string_lossy().as_ref()))
+    {
         return true;
     }
     matches!(
@@ -1624,8 +2231,8 @@ fn language_for_path(path: &Path) -> Option<String> {
 }
 
 pub fn read_git_state(root: &Path) -> GitState {
-    let branch = run_git(root, &["rev-parse", "--abbrev-ref", "HEAD"])
-        .filter(|value| value != "HEAD");
+    let branch =
+        run_git(root, &["rev-parse", "--abbrev-ref", "HEAD"]).filter(|value| value != "HEAD");
     let head_sha = run_git(root, &["rev-parse", "HEAD"]);
     let worktree_root = run_git(root, &["rev-parse", "--show-toplevel"]);
     let uncommitted_patch_hash = git_patch_hash(root);
@@ -1681,7 +2288,11 @@ fn sanitize_hash_for_path(hash: &str) -> String {
 fn safe_workspace_join(root: &Path, relative: &str) -> Result<PathBuf> {
     let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let path = Path::new(relative);
-    if path.is_absolute() || path.components().any(|part| matches!(part, std::path::Component::ParentDir)) {
+    if path.is_absolute()
+        || path
+            .components()
+            .any(|part| matches!(part, std::path::Component::ParentDir))
+    {
         anyhow::bail!("unsafe workspace path");
     }
     let joined = root.join(path);
@@ -1695,7 +2306,13 @@ fn safe_workspace_join(root: &Path, relative: &str) -> Result<PathBuf> {
 fn branch_key(branch: Option<&str>, head_sha: Option<&str>) -> String {
     let raw = branch.or(head_sha).unwrap_or("no-git");
     raw.chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') { ch } else { '_' })
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                ch
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -1847,15 +2464,26 @@ mod tests {
     fn dependency_graph_links_tests_to_sources() {
         let dir = TempDir::new().unwrap();
         write(&dir.path().join("src/auth.rs"), "pub fn login() {}\n");
-        write(&dir.path().join("src/app.ts"), "import { login } from './auth';\n");
-        write(&dir.path().join("src/auth.ts"), "export function login() {}\n");
-        write(&dir.path().join("src/auth_test.rs"), "#[test]\nfn login_test() {}\n");
+        write(
+            &dir.path().join("src/app.ts"),
+            "import { login } from './auth';\n",
+        );
+        write(
+            &dir.path().join("src/auth.ts"),
+            "export function login() {}\n",
+        );
+        write(
+            &dir.path().join("src/auth_test.rs"),
+            "#[test]\nfn login_test() {}\n",
+        );
         let rules = IgnoreRules::load(dir.path()).unwrap();
         let scan = discover_filter_hash(dir.path(), &rules).unwrap();
         let manifest = build_manifest(dir.path(), &rules, scan.files).unwrap();
         let graph = DependencyGraph::rebuild(dir.path(), &manifest).unwrap();
         assert!(graph.edges.iter().any(|edge| {
-            edge.from == "src/auth_test.rs" && edge.to == "src/auth.rs" && edge.kind == "test_source"
+            edge.from == "src/auth_test.rs"
+                && edge.to == "src/auth.rs"
+                && edge.kind == "test_source"
         }));
         assert!(graph.edges.iter().any(|edge| {
             edge.from == "src/app.ts" && edge.to == "src/auth.ts" && edge.kind == "import"
@@ -1866,13 +2494,23 @@ mod tests {
     fn symbol_index_extracts_rust_typescript_and_python_symbols() {
         let dir = TempDir::new().unwrap();
         write(&dir.path().join("src/lib.rs"), "pub fn rust_login() {}\n");
-        write(&dir.path().join("src/app.ts"), "export function tsLogin() {}\n");
-        write(&dir.path().join("src/app.py"), "def py_login():\n    pass\n");
+        write(
+            &dir.path().join("src/app.ts"),
+            "export function tsLogin() {}\n",
+        );
+        write(
+            &dir.path().join("src/app.py"),
+            "def py_login():\n    pass\n",
+        );
         let rules = IgnoreRules::load(dir.path()).unwrap();
         let scan = discover_filter_hash(dir.path(), &rules).unwrap();
         let manifest = build_manifest(dir.path(), &rules, scan.files).unwrap();
         let index = SymbolIndex::rebuild(dir.path(), &manifest).unwrap();
-        let names: HashSet<_> = index.symbols.iter().map(|symbol| symbol.name.as_str()).collect();
+        let names: HashSet<_> = index
+            .symbols
+            .iter()
+            .map(|symbol| symbol.name.as_str())
+            .collect();
         assert!(names.contains("rust_login"));
         assert!(names.contains("tsLogin"));
         assert!(names.contains("py_login"));
@@ -1881,8 +2519,14 @@ mod tests {
     #[test]
     fn exact_vector_index_returns_semantic_chunk() {
         let dir = TempDir::new().unwrap();
-        write(&dir.path().join("src/auth.rs"), "pub fn validate_password() {}\n");
-        write(&dir.path().join("src/billing.rs"), "pub fn charge_card() {}\n");
+        write(
+            &dir.path().join("src/auth.rs"),
+            "pub fn validate_password() {}\n",
+        );
+        write(
+            &dir.path().join("src/billing.rs"),
+            "pub fn charge_card() {}\n",
+        );
         let rules = IgnoreRules::load(dir.path()).unwrap();
         let scan = discover_filter_hash(dir.path(), &rules).unwrap();
         let manifest = build_manifest(dir.path(), &rules, scan.files).unwrap();
@@ -2040,7 +2684,10 @@ mod tests {
         let scan = discover_filter_hash(dir.path(), &rules).unwrap();
         let entries: Vec<_> = scan.files.values().cloned().collect();
         let client = LocalCasSyncClient::new(cas_dir.path().to_path_buf());
-        let hashes: Vec<_> = entries.iter().map(|entry| entry.content_hash.clone()).collect();
+        let hashes: Vec<_> = entries
+            .iter()
+            .map(|entry| entry.content_hash.clone())
+            .collect();
         assert_eq!(client.find_missing_blobs(&hashes).unwrap(), hashes);
         client.upload_blobs(&entries, dir.path()).unwrap();
         assert!(client.find_missing_blobs(&hashes).unwrap().is_empty());
@@ -2076,8 +2723,16 @@ mod tests {
         tampered
             .path_to_hash
             .insert("src/lib.rs".to_string(), "sha256:bad".to_string());
-        assert!(engine.read_file_authorized(dir.path(), "src/lib.rs", &tampered).is_err());
-        assert!(engine.read_file_authorized(dir.path(), "../src/lib.rs", &token).is_err());
+        assert!(
+            engine
+                .read_file_authorized(dir.path(), "src/lib.rs", &tampered)
+                .is_err()
+        );
+        assert!(
+            engine
+                .read_file_authorized(dir.path(), "../src/lib.rs", &token)
+                .is_err()
+        );
     }
 
     #[test]
@@ -2125,13 +2780,18 @@ mod tests {
         write(&file, "fn before() {}\n");
         let engine = CodebaseSyncEngine::new(ManifestStore::new(store_dir.path().to_path_buf()));
         engine.open_workspace(dir.path()).unwrap();
-        let watcher = engine.start_workspace_watcher(dir.path().to_path_buf(), Duration::from_millis(20));
+        let watcher =
+            engine.start_workspace_watcher(dir.path().to_path_buf(), Duration::from_millis(20));
         write(&file, "fn after() {}\n");
         watcher.push_path(file).unwrap();
         thread::sleep(Duration::from_millis(80));
         watcher.stop().unwrap();
         let manifest = engine.store.load(dir.path()).unwrap().unwrap();
-        assert!(manifest.files["src/lib.rs"].content_hash.starts_with("sha256:"));
+        assert!(
+            manifest.files["src/lib.rs"]
+                .content_hash
+                .starts_with("sha256:")
+        );
     }
 
     #[test]
@@ -2154,7 +2814,10 @@ mod tests {
     #[test]
     fn overlay_search_prefers_changed_file_content() {
         let dir = TempDir::new().unwrap();
-        write(&dir.path().join("src/auth.rs"), "pub fn login() {\n    validate_password();\n}\n");
+        write(
+            &dir.path().join("src/auth.rs"),
+            "pub fn login() {\n    validate_password();\n}\n",
+        );
         let rules = IgnoreRules::load(dir.path()).unwrap();
         let scan = discover_filter_hash(dir.path(), &rules).unwrap();
         let manifest = build_manifest(dir.path(), &rules, scan.files).unwrap();
@@ -2179,9 +2842,17 @@ mod tests {
         let manifest = build_manifest(dir.path(), &rules, scan.files).unwrap();
         let overlay = LocalOverlayIndex::rebuild(dir.path(), &manifest).unwrap();
         let ts_hits = overlay.search("second two", 5);
-        assert!(ts_hits.iter().any(|hit| hit.chunk.path == "src/app.ts" && !hit.chunk.text.contains("first")));
+        assert!(
+            ts_hits
+                .iter()
+                .any(|hit| hit.chunk.path == "src/app.ts" && !hit.chunk.text.contains("first"))
+        );
         let py_hits = overlay.search("second two", 5);
-        assert!(py_hits.iter().any(|hit| hit.chunk.path == "src/app.py" && !hit.chunk.text.contains("first")));
+        assert!(
+            py_hits
+                .iter()
+                .any(|hit| hit.chunk.path == "src/app.py" && !hit.chunk.text.contains("first"))
+        );
     }
 
     #[test]
@@ -2220,6 +2891,79 @@ mod tests {
     }
 
     #[test]
+    fn open_workspace_persists_index_snapshot_and_journal() {
+        let dir = TempDir::new().unwrap();
+        let store_dir = TempDir::new().unwrap();
+        write(
+            &dir.path().join("src/auth.rs"),
+            "pub fn login() {\n    validate_password();\n}\n",
+        );
+        let engine = CodebaseSyncEngine::new(ManifestStore::new(store_dir.path().to_path_buf()));
+        engine.open_workspace(dir.path()).unwrap();
+        let index_store = IndexStore::new(store_dir.path().to_path_buf());
+        let snapshot = index_store.load(dir.path()).unwrap().unwrap();
+        assert_eq!(snapshot.indexed_files, 1);
+        assert_eq!(snapshot.manifest.files.len(), 1);
+        assert_eq!(
+            snapshot.overlay.search("validate_password", 5)[0]
+                .chunk
+                .path,
+            "src/auth.rs"
+        );
+        assert_eq!(
+            snapshot.lexical.search("validate_password", 5)[0].path,
+            "src/auth.rs"
+        );
+        assert!(
+            snapshot
+                .symbols
+                .search("login", 5)
+                .iter()
+                .any(|symbol| symbol.name == "login")
+        );
+        assert!(
+            snapshot
+                .ast_chunks
+                .chunks
+                .iter()
+                .any(|chunk| chunk.path == "src/auth.rs" && chunk.name == "login")
+        );
+        assert!(index_store.snapshot_path(dir.path()).exists());
+        assert!(index_store.delta_journal_path(dir.path()).exists());
+        let status = engine.status(dir.path()).unwrap().unwrap();
+        assert_eq!(status.phase, "indexed");
+        assert_eq!(status.percent, 100);
+        assert_eq!(status.indexed_files, 1);
+    }
+
+    #[test]
+    fn file_change_updates_persistent_index() {
+        let dir = TempDir::new().unwrap();
+        let store_dir = TempDir::new().unwrap();
+        let file = dir.path().join("src/auth.rs");
+        write(&file, "pub fn login() { beforetoken(); }\n");
+        let engine = CodebaseSyncEngine::new(ManifestStore::new(store_dir.path().to_path_buf()));
+        engine.open_workspace(dir.path()).unwrap();
+        write(&file, "pub fn login() { aftertoken(); }\n");
+        engine
+            .on_file_change(dir.path(), std::slice::from_ref(&file))
+            .unwrap();
+        let index_store = IndexStore::new(store_dir.path().to_path_buf());
+        let changed = index_store.load(dir.path()).unwrap().unwrap();
+        assert_eq!(
+            changed.lexical.search("aftertoken", 5)[0].path,
+            "src/auth.rs"
+        );
+        assert!(changed.lexical.search("beforetoken", 5).is_empty());
+        fs::remove_file(&file).unwrap();
+        let (_, delete_delta) = engine.on_file_change(dir.path(), &[file]).unwrap();
+        assert_eq!(delete_delta.removed, vec!["src/auth.rs"]);
+        let deleted = index_store.load(dir.path()).unwrap().unwrap();
+        assert!(deleted.lexical.search("aftertoken", 5).is_empty());
+        assert!(!deleted.manifest.files.contains_key("src/auth.rs"));
+    }
+
+    #[test]
     fn ignore_file_change_triggers_full_rescan_reason() {
         let dir = TempDir::new().unwrap();
         let store_dir = TempDir::new().unwrap();
@@ -2239,14 +2983,20 @@ mod tests {
         run_git_cmd(dir.path(), &["init"]);
         run_git_cmd(dir.path(), &["config", "user.email", "test@example.com"]);
         run_git_cmd(dir.path(), &["config", "user.name", "Test"]);
-        write(&dir.path().join("src/lib.rs"), "pub fn branch_value() -> &'static str { \"main\" }\n");
+        write(
+            &dir.path().join("src/lib.rs"),
+            "pub fn branch_value() -> &'static str { \"main\" }\n",
+        );
         run_git_cmd(dir.path(), &["add", "."]);
         run_git_cmd(dir.path(), &["commit", "-m", "main"]);
         let store_dir = TempDir::new().unwrap();
         let engine = CodebaseSyncEngine::new(ManifestStore::new(store_dir.path().to_path_buf()));
         let (main_manifest, _) = engine.open_workspace(dir.path()).unwrap();
         run_git_cmd(dir.path(), &["checkout", "-b", "feature"]);
-        write(&dir.path().join("src/lib.rs"), "pub fn branch_value() -> &'static str { \"feature\" }\n");
+        write(
+            &dir.path().join("src/lib.rs"),
+            "pub fn branch_value() -> &'static str { \"feature\" }\n",
+        );
         run_git_cmd(dir.path(), &["add", "."]);
         run_git_cmd(dir.path(), &["commit", "-m", "feature"]);
         let (feature_manifest, _) = engine.open_workspace(dir.path()).unwrap();
@@ -2255,7 +3005,10 @@ mod tests {
             main_manifest.files["src/lib.rs"].content_hash,
             feature_manifest.files["src/lib.rs"].content_hash
         );
-        run_git_cmd(dir.path(), &["checkout", main_manifest.branch.as_deref().unwrap()]);
+        run_git_cmd(
+            dir.path(),
+            &["checkout", main_manifest.branch.as_deref().unwrap()],
+        );
         let reloaded = engine.status(dir.path()).unwrap().unwrap();
         assert_eq!(reloaded.head_sha, main_manifest.head_sha);
     }

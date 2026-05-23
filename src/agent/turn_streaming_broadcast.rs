@@ -79,6 +79,7 @@ impl Agent {
             let mut ephemeral_signature_messages = Vec::new();
 
             // Inject memory as a user message at the end (preserves cache prefix)
+            let codebase_context_prompt = self.build_codebase_context_prompt(&messages);
             let mut messages_with_memory = messages;
             if let Some(memory) = memory_pending.as_ref() {
                 let memory_count = memory.count.max(1);
@@ -102,6 +103,14 @@ impl Agent {
                 ));
                 ephemeral_signature_messages.push(memory_msg.clone());
                 messages_with_memory.push(memory_msg);
+            }
+            if let Some(codebase_prompt) = codebase_context_prompt {
+                let codebase_msg = Message::user(&format!(
+                    "<system-reminder>\n{}\n</system-reminder>",
+                    codebase_prompt
+                ));
+                ephemeral_signature_messages.push(codebase_msg.clone());
+                messages_with_memory.push(codebase_msg);
             }
 
             logging::info(&format!(
@@ -460,6 +469,7 @@ impl Agent {
                             message_id: self.session.id.clone(),
                             tool_call_id: request_id.clone(),
                             working_dir: self.working_dir().map(PathBuf::from),
+                            allowed_tools: self.allowed_tools.clone(),
                             stdin_request_tx: self.stdin_request_tx.clone(),
                             graceful_shutdown_signal: Some(self.graceful_shutdown.clone()),
                             execution_mode: ToolExecutionMode::AgentTurn,
@@ -786,6 +796,7 @@ impl Agent {
                     message_id: message_id.clone(),
                     tool_call_id: tc.id.clone(),
                     working_dir: self.working_dir().map(PathBuf::from),
+                    allowed_tools: self.allowed_tools.clone(),
                     stdin_request_tx: self.stdin_request_tx.clone(),
                     graceful_shutdown_signal: Some(self.graceful_shutdown.clone()),
                     execution_mode: ToolExecutionMode::AgentTurn,

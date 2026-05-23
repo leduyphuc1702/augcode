@@ -830,6 +830,7 @@ fn test_remote_done_auto_pokes_again_when_todos_remain() {
                 priority: "high".to_string(),
                 blocked_by: Vec::new(),
                 assigned_to: None,
+                ..Default::default()
             }],
         )
         .expect("save todos");

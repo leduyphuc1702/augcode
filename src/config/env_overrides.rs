@@ -211,6 +211,16 @@ impl Config {
                 self.features.message_timestamps = parsed;
             }
         }
+        if let Ok(v) = std::env::var("JCODE_CODEBASE_SYNC_ENABLED") {
+            if let Some(parsed) = parse_env_bool(&v) {
+                self.features.codebase_sync = parsed;
+            }
+        }
+        if let Ok(v) = std::env::var("JCODE_PER_AGENT_SKILL_ROUTER_ENABLED") {
+            if let Some(parsed) = parse_env_bool(&v) {
+                self.features.per_agent_skill_router = parsed;
+            }
+        }
         if let Ok(v) = std::env::var("JCODE_UPDATE_CHANNEL") {
             match v.trim().to_lowercase().as_str() {
                 "main" | "nightly" | "edge" => {

@@ -25,6 +25,7 @@ fn test_ctx(working_dir: &std::path::Path) -> ToolContext {
         message_id: "msg-1".to_string(),
         tool_call_id: "call-1".to_string(),
         working_dir: Some(working_dir.to_path_buf()),
+        allowed_tools: None,
         stdin_request_tx: None,
         graceful_shutdown_signal: None,
         execution_mode: ToolExecutionMode::Direct,
@@ -37,19 +38,13 @@ async fn commit_lineage_search_finds_matching_commits() {
     run_git_cmd(dir.path(), &["init"]);
     run_git_cmd(dir.path(), &["config", "user.email", "test@example.com"]);
     run_git_cmd(dir.path(), &["config", "user.name", "Test"]);
-    write(
-        &dir.path().join("src/search.rs"),
-        "fn search_index() {}\n",
-    );
+    write(&dir.path().join("src/search.rs"), "fn search_index() {}\n");
     run_git_cmd(dir.path(), &["add", "."]);
     run_git_cmd(dir.path(), &["commit", "-m", "add search index"]);
 
     let tool = CommitLineageSearchTool::new();
     let out = tool
-        .execute(
-            json!({"query": "search index"}),
-            test_ctx(dir.path()),
-        )
+        .execute(json!({"query": "search index"}), test_ctx(dir.path()))
         .await
         .unwrap();
     assert!(out.output.contains("add search index"));
@@ -68,10 +63,7 @@ async fn commit_lineage_search_returns_empty_when_no_match() {
 
     let tool = CommitLineageSearchTool::new();
     let out = tool
-        .execute(
-            json!({"query": "nonexistent xyz"}),
-            test_ctx(dir.path()),
-        )
+        .execute(json!({"query": "nonexistent xyz"}), test_ctx(dir.path()))
         .await
         .unwrap();
     assert!(out.output.contains("No matching commits found"));

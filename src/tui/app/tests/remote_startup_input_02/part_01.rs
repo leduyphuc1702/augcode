@@ -603,6 +603,7 @@ fn test_create_transfer_session_from_parent_copies_todos_and_uses_compacted_cont
                 priority: "high".to_string(),
                 blocked_by: Vec::new(),
                 assigned_to: None,
+                ..Default::default()
             }],
         )
         .expect("save todos");
@@ -737,6 +738,7 @@ fn test_escape_interrupt_disables_auto_poke_while_processing() {
                 priority: "high".to_string(),
                 blocked_by: Vec::new(),
                 assigned_to: None,
+                ..Default::default()
             },
         ]));
 

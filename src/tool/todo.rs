@@ -56,6 +56,31 @@ impl Tool for TodoTool {
                             "id": {
                                 "type": "string",
                                 "description": "ID."
+                            },
+                            "blocked_by": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Optional todo dependencies."
+                            },
+                            "assigned_to": {
+                                "type": "string",
+                                "description": "Optional agent/session assigned to this todo."
+                            },
+                            "lifecycle_stage": {
+                                "type": "string",
+                                "description": "Optional lifecycle stage inferred by the skill router."
+                            },
+                            "task_type": {
+                                "type": "string",
+                                "description": "Optional task type inferred by the skill router."
+                            },
+                            "risk": {
+                                "type": "string",
+                                "description": "Optional task risk inferred by the skill router."
+                            },
+                            "skill_routing": {
+                                "type": "object",
+                                "description": "Optional per-task skill routing decision."
                             }
                         }
                     }
@@ -72,7 +97,25 @@ impl Tool for TodoTool {
             "read"
         };
         match params.todos {
-            Some(todos) => {
+            Some(mut todos) => {
+                if crate::skill_router::enabled() {
+                    let skills = crate::skill::SkillRegistry::load_for_working_dir(
+                        ctx.working_dir.as_deref(),
+                    )
+                    .unwrap_or_else(|_| (*crate::skill::SkillRegistry::shared_snapshot()).clone());
+                    let manifests = skills.manifests();
+                    let agent = crate::skill_router::AgentProfile::from_allowed_tools(
+                        ctx.session_id.clone(),
+                        "implementer",
+                        ctx.allowed_tools.as_ref(),
+                    );
+                    crate::skill_router::annotate_todos(
+                        &mut todos,
+                        &manifests,
+                        ctx.working_dir.as_deref(),
+                        &agent,
+                    );
+                }
                 save_todos(&ctx.session_id, &todos)?;
 
                 Bus::global().publish(BusEvent::TodoUpdated(TodoEvent {
@@ -122,5 +165,10 @@ mod tests {
         assert_eq!(props.len(), 2);
         assert!(props.contains_key("intent"));
         assert!(props.contains_key("todos"));
+        let todo_props = props["todos"]["items"]["properties"]
+            .as_object()
+            .expect("todo item properties");
+        assert!(todo_props.contains_key("skill_routing"));
+        assert!(todo_props.contains_key("lifecycle_stage"));
     }
 }

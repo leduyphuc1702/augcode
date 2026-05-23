@@ -88,6 +88,7 @@ fn test_remote_auto_poke_followup_preserves_visible_timer_and_stays_hidden() {
                 priority: "high".to_string(),
                 blocked_by: Vec::new(),
                 assigned_to: None,
+                ..Default::default()
             }],
         )
         .expect("save todos");
@@ -138,6 +139,7 @@ fn test_remote_poke_status_and_off_update_state() {
                 priority: "high".to_string(),
                 blocked_by: Vec::new(),
                 assigned_to: None,
+                ..Default::default()
             }],
         )
         .expect("save todos");

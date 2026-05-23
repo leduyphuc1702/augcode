@@ -38,6 +38,11 @@ fn swarm_spawn_mode_defaults_to_visible() {
 }
 
 #[test]
+fn per_agent_skill_router_defaults_off() {
+    assert!(!Config::default().features.per_agent_skill_router);
+}
+
+#[test]
 fn swarm_spawn_mode_parses_supported_values() {
     let cfg: Config = toml::from_str("[agents]\nswarm_spawn_mode = \"headless\"\n")
         .expect("headless swarm_spawn_mode should parse");
@@ -315,6 +320,19 @@ fn test_env_override_native_scrollbars() {
     } else {
         crate::env::remove_var("JCODE_SIDE_PANEL_NATIVE_SCROLLBAR");
     }
+}
+
+#[test]
+fn test_env_override_per_agent_skill_router() {
+    let _guard = crate::storage::lock_test_env();
+    let prev = std::env::var_os("JCODE_PER_AGENT_SKILL_ROUTER_ENABLED");
+    crate::env::set_var("JCODE_PER_AGENT_SKILL_ROUTER_ENABLED", "true");
+
+    let mut cfg = Config::default();
+    cfg.apply_env_overrides();
+
+    assert!(cfg.features.per_agent_skill_router);
+    restore_env_var("JCODE_PER_AGENT_SKILL_ROUTER_ENABLED", prev);
 }
 
 #[test]

@@ -332,6 +332,7 @@ impl Agent {
             message_id: self.session.id.clone(),
             tool_call_id: call_id,
             working_dir: self.working_dir().map(PathBuf::from),
+            allowed_tools: self.allowed_tools.clone(),
             stdin_request_tx: self.stdin_request_tx.clone(),
             graceful_shutdown_signal: Some(self.graceful_shutdown.clone()),
             execution_mode: ToolExecutionMode::Direct,
@@ -602,23 +603,33 @@ impl Agent {
 
             // Check for skill invocation
             if let Some(skill_name) = SkillRegistry::parse_invocation(input) {
-                if let Some(skill) = skills.get(skill_name) {
-                    println!("Activating skill: {}", skill.name);
-                    println!("{}\n", skill.description);
-                    self.active_skill = Some(skill_name.to_string());
-                    continue;
-                } else {
-                    println!("Unknown skill: /{}", skill_name);
-                    println!(
-                        "Available: {}",
-                        skills
-                            .list()
-                            .iter()
-                            .map(|s| format!("/{}", s.name))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    );
-                    continue;
+                match skills.lookup(skill_name) {
+                    crate::skill::SkillLookup::Found(skill) => {
+                        println!("Activating skill: {}", skill.name);
+                        println!("{}\n", skill.description);
+                        self.active_skill = Some(skill_name.to_string());
+                        continue;
+                    }
+                    crate::skill::SkillLookup::Ambiguous(matches) => {
+                        println!("Ambiguous skill: /{}", skill_name);
+                        for skill in matches {
+                            println!("- {}", skill.id);
+                        }
+                        continue;
+                    }
+                    crate::skill::SkillLookup::Missing => {
+                        println!("Unknown skill: /{}", skill_name);
+                        println!(
+                            "Available: {}",
+                            skills
+                                .list()
+                                .iter()
+                                .map(|s| format!("/{}", s.name))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        );
+                        continue;
+                    }
                 }
             }
 

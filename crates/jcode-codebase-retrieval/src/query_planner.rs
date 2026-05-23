@@ -172,9 +172,7 @@ impl QueryPlanner {
     fn extract_queries(query: &str, intent: QueryIntent) -> (String, String, Option<String>) {
         let cleaned = query.trim().to_string();
         let symbol_q = match intent {
-            QueryIntent::Refactor | QueryIntent::Edit | QueryIntent::Debug => {
-                Some(cleaned.clone())
-            }
+            QueryIntent::Refactor | QueryIntent::Edit | QueryIntent::Debug => Some(cleaned.clone()),
             _ => None,
         };
         (cleaned.clone(), cleaned, symbol_q)
@@ -187,13 +185,34 @@ mod tests {
 
     #[test]
     fn test_intent_detection() {
-        assert_eq!(QueryPlanner::plan("how does auth work").intent, QueryIntent::Understand);
-        assert_eq!(QueryPlanner::plan("fix the login bug").intent, QueryIntent::Debug);
-        assert_eq!(QueryPlanner::plan("add unit test for validate").intent, QueryIntent::Test);
-        assert_eq!(QueryPlanner::plan("refactor user service").intent, QueryIntent::Refactor);
-        assert_eq!(QueryPlanner::plan("review PR changes").intent, QueryIntent::Review);
-        assert_eq!(QueryPlanner::plan("change password logic").intent, QueryIntent::Edit);
-        assert_eq!(QueryPlanner::plan("general query").intent, QueryIntent::General);
+        assert_eq!(
+            QueryPlanner::plan("how does auth work").intent,
+            QueryIntent::Understand
+        );
+        assert_eq!(
+            QueryPlanner::plan("fix the login bug").intent,
+            QueryIntent::Debug
+        );
+        assert_eq!(
+            QueryPlanner::plan("add unit test for validate").intent,
+            QueryIntent::Test
+        );
+        assert_eq!(
+            QueryPlanner::plan("refactor user service").intent,
+            QueryIntent::Refactor
+        );
+        assert_eq!(
+            QueryPlanner::plan("review PR changes").intent,
+            QueryIntent::Review
+        );
+        assert_eq!(
+            QueryPlanner::plan("change password logic").intent,
+            QueryIntent::Edit
+        );
+        assert_eq!(
+            QueryPlanner::plan("general query").intent,
+            QueryIntent::General
+        );
     }
 
     #[test]

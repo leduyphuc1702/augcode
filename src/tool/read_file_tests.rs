@@ -16,6 +16,7 @@ fn test_ctx(working_dir: &std::path::Path) -> ToolContext {
         message_id: "msg-1".to_string(),
         tool_call_id: "call-1".to_string(),
         working_dir: Some(working_dir.to_path_buf()),
+        allowed_tools: None,
         stdin_request_tx: None,
         graceful_shutdown_signal: None,
         execution_mode: ToolExecutionMode::Direct,
@@ -26,7 +27,10 @@ fn test_ctx(working_dir: &std::path::Path) -> ToolContext {
 async fn read_file_returns_authorized_content() {
     let dir = TempDir::new().unwrap();
     let store = TempDir::new().unwrap();
-    write(&dir.path().join("src/lib.rs"), "pub fn authorized_fn() {}\n");
+    write(
+        &dir.path().join("src/lib.rs"),
+        "pub fn authorized_fn() {}\n",
+    );
     crate::env::set_var("JCODE_DIR", store.path());
     let tool = ReadFileTool::new();
     let out = tool

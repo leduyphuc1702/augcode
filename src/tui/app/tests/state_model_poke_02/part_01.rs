@@ -607,6 +607,7 @@ fn test_context_command_reports_session_context_snapshot() {
                 priority: "high".to_string(),
                 blocked_by: Vec::new(),
                 assigned_to: None,
+                ..Default::default()
             }],
         )
         .expect("save todos");

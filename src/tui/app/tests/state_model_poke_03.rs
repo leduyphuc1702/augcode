@@ -1790,6 +1790,7 @@ fn test_poke_arms_auto_poke_until_todos_are_done() {
                 priority: "high".to_string(),
                 blocked_by: Vec::new(),
                 assigned_to: None,
+                ..Default::default()
             }],
         )
         .expect("save todos");
@@ -1818,6 +1819,7 @@ fn test_poke_status_reports_current_state() {
                 priority: "high".to_string(),
                 blocked_by: Vec::new(),
                 assigned_to: None,
+                ..Default::default()
             }],
         )
         .expect("save todos");
@@ -1864,6 +1866,7 @@ fn test_poke_off_disarms_and_clears_queued_followup() {
                 priority: "high".to_string(),
                 blocked_by: Vec::new(),
                 assigned_to: None,
+                ..Default::default()
             }],
         )
         .expect("save todos");
@@ -1904,6 +1907,7 @@ fn test_poke_queues_when_turn_is_in_progress() {
                 priority: "high".to_string(),
                 blocked_by: Vec::new(),
                 assigned_to: None,
+                ..Default::default()
             }],
         )
         .expect("save todos");
@@ -1936,6 +1940,7 @@ fn test_poke_queues_when_turn_is_in_progress() {
                     priority: "high".to_string(),
                     blocked_by: Vec::new(),
                     assigned_to: None,
+                ..Default::default()
                 },
                 crate::todo::TodoItem {
                     id: "todo-2".to_string(),
@@ -1944,6 +1949,7 @@ fn test_poke_queues_when_turn_is_in_progress() {
                     priority: "medium".to_string(),
                     blocked_by: Vec::new(),
                     assigned_to: None,
+                ..Default::default()
                 },
             ],
         )
@@ -1972,6 +1978,7 @@ fn test_finish_turn_auto_pokes_again_when_todos_remain() {
                 priority: "high".to_string(),
                 blocked_by: Vec::new(),
                 assigned_to: None,
+                ..Default::default()
             }],
         )
         .expect("save todos");
@@ -1999,6 +2006,7 @@ fn test_finish_turn_auto_poke_preserves_visible_turn_started() {
                 priority: "high".to_string(),
                 blocked_by: Vec::new(),
                 assigned_to: None,
+                ..Default::default()
             }],
         )
         .expect("save todos");

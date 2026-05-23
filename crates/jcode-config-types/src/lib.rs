@@ -597,6 +597,10 @@ pub struct FeatureConfig {
     pub swarm: bool,
     /// Inject timestamps into user messages and tool results sent to the model (default: true)
     pub message_timestamps: bool,
+    /// Enable local codebase auto-sync and provider-neutral context injection (default: true)
+    pub codebase_sync: bool,
+    /// Enable per-agent/per-task skill routing (default: false)
+    pub per_agent_skill_router: bool,
     /// Update channel: "stable" (releases only) or "main" (latest commits)
     pub update_channel: UpdateChannel,
 }
@@ -607,6 +611,8 @@ impl Default for FeatureConfig {
             memory: true,
             swarm: true,
             message_timestamps: true,
+            codebase_sync: true,
+            per_agent_skill_router: false,
             update_channel: UpdateChannel::default(),
         }
     }

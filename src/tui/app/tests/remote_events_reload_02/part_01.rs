@@ -15,6 +15,7 @@ fn test_remote_poke_queues_when_turn_is_in_progress() {
                 priority: "high".to_string(),
                 blocked_by: Vec::new(),
                 assigned_to: None,
+                ..Default::default()
             }],
         )
         .expect("save todos");
@@ -54,6 +55,7 @@ fn test_remote_poke_queues_when_turn_is_in_progress() {
                     priority: "high".to_string(),
                     blocked_by: Vec::new(),
                     assigned_to: None,
+                ..Default::default()
                 },
                 crate::todo::TodoItem {
                     id: "todo-2".to_string(),
@@ -62,6 +64,7 @@ fn test_remote_poke_queues_when_turn_is_in_progress() {
                     priority: "medium".to_string(),
                     blocked_by: Vec::new(),
                     assigned_to: None,
+                ..Default::default()
                 },
             ],
         )
@@ -148,6 +151,7 @@ fn test_remote_interrupted_auto_poke_requeues_after_deferred_poke() {
                 priority: "high".to_string(),
                 blocked_by: Vec::new(),
                 assigned_to: None,
+                ..Default::default()
             }],
         )
         .expect("save todos");

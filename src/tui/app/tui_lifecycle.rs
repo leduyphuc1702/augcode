@@ -919,6 +919,12 @@ impl App {
             app.status_notice = Some((notice, Instant::now()));
         }
 
+        #[cfg(not(test))]
+        crate::codebase_sync_runtime::start_for_session(
+            app.session.id.clone(),
+            app.session.working_dir.clone(),
+        );
+
         app
     }
 

@@ -97,6 +97,7 @@ fn test_remote_escape_interrupt_disables_auto_poke_while_processing() {
                 priority: "high".to_string(),
                 blocked_by: Vec::new(),
                 assigned_to: None,
+                ..Default::default()
             },
         ]));
 

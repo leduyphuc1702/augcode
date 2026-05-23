@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use jcode_codebase_sync::{
-    CodebaseSyncEngine, DependencyGraph, ExactVectorIndex, FileEntry, LocalOverlayIndex, ManifestStore,
-    SymbolIndex, UnsavedBufferIndex,
+    CodebaseSyncEngine, DependencyGraph, IgnoreRules, IndexSnapshot, Manifest, ManifestStore,
+    UnsavedBufferIndex, build_manifest, discover_filter_hash,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -11,8 +11,7 @@ use std::time::Instant;
 
 pub mod lexical_index;
 pub mod query_planner;
-use lexical_index::LexicalIndex;
-use query_planner::{QueryPlanner, SourceWeights};
+use query_planner::{QueryIntent, QueryPlanner, SourceWeights};
 
 const DEFAULT_TOKEN_BUDGET: usize = 8_000;
 const MAX_RANGE_LINES: usize = 12;
@@ -80,6 +79,30 @@ pub struct Freshness {
 pub struct RetrievalEvalCase {
     pub query: String,
     pub expected_files: Vec<String>,
+    #[serde(default)]
+    pub intent: Option<QueryIntent>,
+    #[serde(default)]
+    pub active_file: Option<String>,
+    #[serde(default)]
+    pub must_not_return: Vec<String>,
+    #[serde(default)]
+    pub category: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RetrievalEvalCategoryReport {
+    pub category: String,
+    pub cases_total: usize,
+    pub recall_at_5_hits: usize,
+    pub recall_at_5_rate_bps: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RetrievalEvalMissingCase {
+    pub query: String,
+    pub expected_files: Vec<String>,
+    pub returned_files: Vec<String>,
+    pub category: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -92,6 +115,9 @@ pub struct RetrievalEvalReport {
     pub mrr_bps: u32,
     pub stale_context_count: usize,
     pub unauthorized_candidate_count: usize,
+    pub forbidden_context_count: usize,
+    pub categories: Vec<RetrievalEvalCategoryReport>,
+    pub missing_expected: Vec<RetrievalEvalMissingCase>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -145,16 +171,31 @@ impl CodebaseRetrievalEngine {
             path: path.to_string(),
             query: query.to_string(),
             save_to_search_ms: start.elapsed().as_millis(),
-            found: response.context_pack.files.iter().any(|file| file.path == path),
+            found: response
+                .context_pack
+                .files
+                .iter()
+                .any(|file| file.path == path),
         })
     }
 
     pub fn eval_fixture(&self, root: &Path, fixture_path: &Path) -> Result<RetrievalEvalReport> {
-        let cases: Vec<RetrievalEvalCase> = serde_json::from_str(&fs::read_to_string(fixture_path)?)?;
-        self.eval(root, &cases)
+        let cases: Vec<RetrievalEvalCase> =
+            serde_json::from_str(&fs::read_to_string(fixture_path)?)?;
+        let excluded = normalize_eval_fixture_path(root, fixture_path);
+        self.eval_internal(root, &cases, excluded.as_deref())
     }
 
     pub fn eval(&self, root: &Path, cases: &[RetrievalEvalCase]) -> Result<RetrievalEvalReport> {
+        self.eval_internal(root, cases, None)
+    }
+
+    fn eval_internal(
+        &self,
+        root: &Path,
+        cases: &[RetrievalEvalCase],
+        excluded_path: Option<&str>,
+    ) -> Result<RetrievalEvalReport> {
         let mut report = RetrievalEvalReport {
             cases_total: cases.len(),
             recall_at_5_hits: 0,
@@ -164,13 +205,17 @@ impl CodebaseRetrievalEngine {
             mrr_bps: 0,
             stale_context_count: 0,
             unauthorized_candidate_count: 0,
+            forbidden_context_count: 0,
+            categories: Vec::new(),
+            missing_expected: Vec::new(),
         };
+        let mut categories = BTreeMap::<String, (usize, usize)>::new();
         for case in cases {
             let response = self.search(
                 root,
                 RetrievalRequest {
                     query: case.query.clone(),
-                    active_file: None,
+                    active_file: case.active_file.clone(),
                     token_budget: None,
                     unsaved_buffers: Vec::new(),
                 },
@@ -190,13 +235,22 @@ impl CodebaseRetrievalEngine {
                 .files
                 .iter()
                 .map(|file| file.path.as_str())
+                .filter(|path| Some(*path) != excluded_path)
                 .collect();
             let top_5: Vec<_> = all_paths.iter().take(5).copied().collect();
-            if case.expected_files.iter().any(|expected| top_5.contains(&expected.as_str())) {
+            let hit_5 = case
+                .expected_files
+                .iter()
+                .any(|expected| top_5.contains(&expected.as_str()));
+            if hit_5 {
                 report.recall_at_5_hits += 1;
             }
             let top_20: Vec<_> = all_paths.iter().take(20).copied().collect();
-            if case.expected_files.iter().any(|expected| top_20.contains(&expected.as_str())) {
+            if case
+                .expected_files
+                .iter()
+                .any(|expected| top_20.contains(&expected.as_str()))
+            {
                 report.recall_at_20_hits += 1;
             }
             let mut rank = None;
@@ -208,8 +262,32 @@ impl CodebaseRetrievalEngine {
             }
             if let Some(r) = rank {
                 report.mrr_bps += (10_000 / r) as u32;
+            } else {
+                report.missing_expected.push(RetrievalEvalMissingCase {
+                    query: case.query.clone(),
+                    expected_files: case.expected_files.clone(),
+                    returned_files: all_paths.iter().map(|path| (*path).to_string()).collect(),
+                    category: case.category.clone(),
+                });
+            }
+            if let Some(category) = &case.category {
+                let entry = categories.entry(category.clone()).or_default();
+                entry.0 += 1;
+                if hit_5 {
+                    entry.1 += 1;
+                }
             }
             for file in &response.context_pack.files {
+                if Some(file.path.as_str()) == excluded_path {
+                    continue;
+                }
+                if case
+                    .must_not_return
+                    .iter()
+                    .any(|forbidden| forbidden == &file.path)
+                {
+                    report.forbidden_context_count += 1;
+                }
                 if !token.authorize_path_hash(&file.path, &file.content_hash)
                     && file.why_included != "unsaved buffer matches current editor state"
                 {
@@ -232,30 +310,73 @@ impl CodebaseRetrievalEngine {
                 ((report.recall_at_20_hits * 10_000) / report.cases_total) as u32;
             report.mrr_bps = report.mrr_bps / report.cases_total as u32;
         }
+        report.categories = categories
+            .into_iter()
+            .map(
+                |(category, (cases_total, recall_at_5_hits))| RetrievalEvalCategoryReport {
+                    category,
+                    cases_total,
+                    recall_at_5_hits,
+                    recall_at_5_rate_bps: rate_bps(recall_at_5_hits, cases_total),
+                },
+            )
+            .collect();
         Ok(report)
     }
 
     pub fn search(&self, root: &Path, req: RetrievalRequest) -> Result<SearchResponse> {
-        let (manifest, delta) = self.sync.open_workspace(root)?;
-        let local_overlay_included = !delta.added.is_empty()
-            || !delta.modified.is_empty()
-            || !delta.removed.is_empty();
-        let token = jcode_codebase_sync::SnapshotTokenPayload::from_manifest(&manifest);
-        let graph = DependencyGraph::rebuild(root, &manifest)?;
+        let (snapshot, mut local_overlay_included) = match self.sync.index_snapshot(root)? {
+            Some(snapshot) => (snapshot, false),
+            None => {
+                let (_manifest, delta) = self.sync.open_workspace(root)?;
+                let snapshot = self
+                    .sync
+                    .index_snapshot(root)?
+                    .ok_or_else(|| anyhow::anyhow!("codebase index snapshot was not written"))?;
+                (
+                    snapshot,
+                    !delta.added.is_empty()
+                        || !delta.modified.is_empty()
+                        || !delta.removed.is_empty(),
+                )
+            }
+        };
+        let mut manifest = snapshot.manifest.clone();
+        let mut token = jcode_codebase_sync::SnapshotTokenPayload::from_manifest(&manifest);
+        let graph = snapshot.graph.clone();
         let graph_distances = bfs_distances(&graph, req.active_file.as_deref());
         let mut candidates = search_unsaved_buffers(&req);
-        candidates.extend(search_overlay(root, &manifest, &req)?);
-        candidates.extend(search_symbols(root, &manifest, &req)?);
-        candidates.extend(search_vector(root, &manifest, &req)?);
-        candidates.extend(search_manifest_files(root, &manifest.files.values().collect::<Vec<_>>(), &req)?);
-        let graph_neighbors = search_graph_neighbors_with_graph(&graph, &manifest, root, &candidates)?;
+        candidates.extend(search_overlay(&snapshot, &req));
+        candidates.extend(search_ast_chunks(&snapshot, &req));
+        candidates.extend(search_symbols(&snapshot, &req));
+        candidates.extend(search_manifest_files(&snapshot, &req));
+        let graph_neighbors = search_graph_neighbors_with_graph(&graph, &snapshot, &candidates);
         candidates.extend(graph_neighbors);
+        let before_validation = candidates.len();
+        candidates.retain(|candidate| {
+            candidate.why == "unsaved buffer matches current editor state"
+                || candidate_matches_disk(root, candidate).unwrap_or(false)
+        });
+        if before_validation > candidates.len()
+            || (candidates.is_empty() && req.unsaved_buffers.is_empty())
+        {
+            if let Some((fallback_manifest, fallback_candidates)) =
+                search_cold_or_stale_fallback(root, &req)?
+            {
+                manifest = fallback_manifest;
+                token = jcode_codebase_sync::SnapshotTokenPayload::from_manifest(&manifest);
+                candidates.extend(fallback_candidates);
+                local_overlay_included = true;
+            }
+        }
         candidates.retain(|candidate| {
             candidate.why == "unsaved buffer matches current editor state"
                 || token.authorize_path_hash(&candidate.path, &candidate.content_hash)
         });
         let plan = QueryPlanner::plan(&req.query);
-        rerank_candidates(&mut candidates, &req, &plan.weights, &graph_distances, &plan.intent);
+        HybridReranker::new(&req, &plan.weights, &graph_distances, &plan.intent)
+            .rank(&mut candidates);
+        dedupe_candidates(&mut candidates);
         let snapshot_id = format!(
             "{}:{}:{}",
             manifest.workspace_id,
@@ -263,7 +384,10 @@ impl CodebaseRetrievalEngine {
             manifest.ignore_rules_hash
         );
         Ok(SearchResponse {
-            context_pack: compress_candidates(candidates, req.token_budget.unwrap_or(DEFAULT_TOKEN_BUDGET)),
+            context_pack: compress_candidates(
+                candidates,
+                req.token_budget.unwrap_or(DEFAULT_TOKEN_BUDGET),
+            ),
             snapshot_id,
             freshness: Freshness {
                 local_overlay_included,
@@ -272,6 +396,23 @@ impl CodebaseRetrievalEngine {
             },
         })
     }
+}
+
+fn rate_bps(hits: usize, total: usize) -> u32 {
+    if total == 0 {
+        0
+    } else {
+        ((hits * 10_000) / total) as u32
+    }
+}
+
+fn normalize_eval_fixture_path(root: &Path, fixture_path: &Path) -> Option<String> {
+    let path = if fixture_path.is_absolute() {
+        fixture_path.strip_prefix(root).ok()?.to_path_buf()
+    } else {
+        fixture_path.to_path_buf()
+    };
+    Some(path.to_string_lossy().replace('\\', "/"))
 }
 
 #[derive(Debug)]
@@ -307,13 +448,9 @@ fn search_unsaved_buffers(req: &RetrievalRequest) -> Vec<Candidate> {
         .collect()
 }
 
-fn search_overlay(
-    root: &Path,
-    manifest: &jcode_codebase_sync::Manifest,
-    req: &RetrievalRequest,
-) -> Result<Vec<Candidate>> {
-    let overlay = LocalOverlayIndex::rebuild(root, manifest)?;
-    Ok(overlay
+fn search_overlay(snapshot: &IndexSnapshot, req: &RetrievalRequest) -> Vec<Candidate> {
+    snapshot
+        .overlay
         .search(&req.query, 20)
         .into_iter()
         .map(|hit| Candidate {
@@ -327,70 +464,78 @@ fn search_overlay(
             },
             why: "saved local overlay matches current snapshot".to_string(),
         })
-        .collect())
+        .collect()
 }
 
-fn search_symbols(
-    root: &Path,
-    manifest: &jcode_codebase_sync::Manifest,
-    req: &RetrievalRequest,
-) -> Result<Vec<Candidate>> {
-    let index = SymbolIndex::rebuild(root, manifest)?;
+fn search_ast_chunks(snapshot: &IndexSnapshot, req: &RetrievalRequest) -> Vec<Candidate> {
+    let terms = query_terms(&req.query);
+    if terms.is_empty() {
+        return Vec::new();
+    }
     let mut candidates = Vec::new();
-    for symbol in index.search(&req.query, 20) {
-        let Some(entry) = manifest.files.get(&symbol.path) else {
+    for chunk in &snapshot.ast_chunks.chunks {
+        let Some(entry) = snapshot.manifest.files.get(&chunk.path) else {
             continue;
         };
-        let text = fs::read_to_string(root.join(&symbol.path))?;
-        let lines: Vec<_> = text.lines().collect();
-        let start = symbol.start_line.saturating_sub(1);
-        let end = (start + MAX_RANGE_LINES).min(lines.len());
+        let score = ast_chunk_score(chunk, &terms);
+        if score == 0 {
+            continue;
+        }
+        let Some(range) = ast_chunk_range(snapshot, chunk) else {
+            continue;
+        };
+        candidates.push(Candidate {
+            path: chunk.path.clone(),
+            content_hash: entry.content_hash.clone(),
+            score: 900 + score,
+            range,
+            why: format!("ast:{}:{}", chunk.kind, chunk.name),
+        });
+    }
+    candidates.sort_by(|a, b| {
+        b.score
+            .cmp(&a.score)
+            .then_with(|| a.path.cmp(&b.path))
+            .then_with(|| a.range.start_line.cmp(&b.range.start_line))
+    });
+    candidates.truncate(50);
+    candidates
+}
+
+fn search_symbols(snapshot: &IndexSnapshot, req: &RetrievalRequest) -> Vec<Candidate> {
+    let mut candidates = Vec::new();
+    for symbol in snapshot.symbols.search(&req.query, 20) {
+        let Some(entry) = snapshot.manifest.files.get(&symbol.path) else {
+            continue;
+        };
+        let Some(range) = symbol_range_from_snapshot(
+            snapshot,
+            &symbol.path,
+            symbol.start_line,
+            symbol.end_line.max(symbol.start_line),
+        ) else {
+            continue;
+        };
         candidates.push(Candidate {
             path: symbol.path,
             content_hash: entry.content_hash.clone(),
-            score: 750,
-            range: ContextRange {
-                start_line: start + 1,
-                end_line: end,
-                text: lines[start..end].join("\n"),
-            },
-            why: format!("symbol definition match: {}", symbol.name),
+            score: 850 + symbol.confidence as usize,
+            range,
+            why: format!("symbol:name:{}", symbol.name),
         });
     }
-    Ok(candidates)
-}
-
-fn search_vector(
-    root: &Path,
-    manifest: &jcode_codebase_sync::Manifest,
-    req: &RetrievalRequest,
-) -> Result<Vec<Candidate>> {
-    let overlay = LocalOverlayIndex::rebuild(root, manifest)?;
-    let index = ExactVectorIndex::rebuild(&overlay);
-    Ok(index
-        .search(&req.query, 20)
-        .into_iter()
-        .map(|hit| Candidate {
-            path: hit.chunk.path,
-            content_hash: hit.chunk.content_hash,
-            score: (hit.score * 500.0) as usize,
-            range: ContextRange {
-                start_line: hit.chunk.start_line,
-                end_line: hit.chunk.end_line,
-                text: hit.chunk.text,
-            },
-            why: "exact local vector match current snapshot".to_string(),
-        })
-        .collect())
+    candidates
 }
 
 fn search_graph_neighbors_with_graph(
     graph: &DependencyGraph,
-    manifest: &jcode_codebase_sync::Manifest,
-    root: &Path,
+    snapshot: &IndexSnapshot,
     candidates: &[Candidate],
-) -> Result<Vec<Candidate>> {
-    let candidate_paths: HashSet<_> = candidates.iter().map(|candidate| candidate.path.as_str()).collect();
+) -> Vec<Candidate> {
+    let candidate_paths: HashSet<_> = candidates
+        .iter()
+        .map(|candidate| candidate.path.as_str())
+        .collect();
     let mut neighbors = Vec::new();
     for edge in &graph.edges {
         let neighbor_path = if candidate_paths.contains(edge.from.as_str()) {
@@ -400,10 +545,13 @@ fn search_graph_neighbors_with_graph(
         } else {
             continue;
         };
-        let Some(entry) = manifest.files.get(neighbor_path) else {
+        let Some(entry) = snapshot.manifest.files.get(neighbor_path) else {
             continue;
         };
-        let text = fs::read_to_string(root.join(neighbor_path))?;
+        let Some(doc) = snapshot.lexical.document(neighbor_path) else {
+            continue;
+        };
+        let text = &doc.text;
         let lines: Vec<_> = text.lines().take(MAX_RANGE_LINES).collect();
         neighbors.push(Candidate {
             path: neighbor_path.clone(),
@@ -417,7 +565,7 @@ fn search_graph_neighbors_with_graph(
             why: "dependency graph neighbor".to_string(),
         });
     }
-    Ok(neighbors)
+    neighbors
 }
 
 fn bfs_distances(graph: &DependencyGraph, start: Option<&str>) -> HashMap<String, usize> {
@@ -447,26 +595,91 @@ fn bfs_distances(graph: &DependencyGraph, start: Option<&str>) -> HashMap<String
     distances
 }
 
-fn search_manifest_files(root: &Path, files: &[&FileEntry], req: &RetrievalRequest) -> Result<Vec<Candidate>> {
+fn ast_chunk_score(chunk: &jcode_codebase_sync::AstChunk, terms: &[String]) -> usize {
+    let mut score = score_text(&chunk.name, terms) * 80;
+    score += score_text(&chunk.signature, terms) * 40;
+    score += score_text(&chunk.kind, terms) * 20;
+    score += score_text(&chunk.path, terms) * 80;
+    if terms
+        .iter()
+        .any(|term| term == &chunk.name.to_lowercase() || term == &chunk.name)
+    {
+        score += 150;
+    }
+    if chunk.kind == "file_chunk" {
+        score = score.saturating_sub(75);
+    }
+    score
+}
+
+fn ast_chunk_range(
+    snapshot: &IndexSnapshot,
+    chunk: &jcode_codebase_sync::AstChunk,
+) -> Option<ContextRange> {
+    range_from_snapshot_lines(snapshot, &chunk.path, chunk.start_line, chunk.end_line)
+}
+
+fn symbol_range_from_snapshot(
+    snapshot: &IndexSnapshot,
+    path: &str,
+    start_line: usize,
+    end_line: usize,
+) -> Option<ContextRange> {
+    if let Some(chunk) = snapshot.ast_chunks.chunk_for_line(path, start_line) {
+        return range_from_snapshot_lines(snapshot, path, chunk.start_line, chunk.end_line);
+    }
+    if let Some(chunk) = snapshot.overlay.chunk_for_line(path, start_line) {
+        return Some(ContextRange {
+            start_line: chunk.start_line,
+            end_line: chunk.end_line,
+            text: chunk.text.clone(),
+        });
+    }
+    range_from_snapshot_lines(snapshot, path, start_line, end_line)
+}
+
+fn range_from_snapshot_lines(
+    snapshot: &IndexSnapshot,
+    path: &str,
+    start_line: usize,
+    end_line: usize,
+) -> Option<ContextRange> {
+    let doc = snapshot.lexical.document(path)?;
+    let lines: Vec<_> = doc.text.lines().collect();
+    if lines.is_empty() {
+        return Some(ContextRange {
+            start_line: 1,
+            end_line: 1,
+            text: String::new(),
+        });
+    }
+    let start = start_line.saturating_sub(1);
+    if start >= lines.len() {
+        return None;
+    }
+    let end = end_line.max(start_line).min(lines.len()).max(start + 1);
+    Some(ContextRange {
+        start_line: start + 1,
+        end_line: end,
+        text: lines[start..end].join("\n"),
+    })
+}
+
+fn search_manifest_files(snapshot: &IndexSnapshot, req: &RetrievalRequest) -> Vec<Candidate> {
     let terms = query_terms(&req.query);
     if terms.is_empty() {
-        return Ok(Vec::new());
+        return Vec::new();
     }
-    let mut index = LexicalIndex::new();
-    for entry in files {
-        let path = root.join(&entry.path);
-        let text = fs::read_to_string(&path).unwrap_or_default();
-        let doc_text = format!("{} {} {}", entry.path, entry.path.replace('/', " "), text);
-        index.add_document(&entry.path, &doc_text);
-    }
-    let bm25_hits = index.search(&req.query, 50);
+    let bm25_hits = snapshot.lexical.search(&req.query, 50);
     let mut candidates = Vec::new();
     for hit in bm25_hits {
-        let Some(entry) = files.iter().find(|e| e.path == hit.doc_id).copied() else {
+        let Some(entry) = snapshot.manifest.files.get(&hit.path) else {
             continue;
         };
-        let path = root.join(&entry.path);
-        let text = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+        let Some(doc) = snapshot.lexical.document(&entry.path) else {
+            continue;
+        };
+        let text = &doc.text;
         let lines: Vec<_> = text.lines().collect();
         let mut best_line = None;
         let mut best_line_score = 0;
@@ -484,63 +697,209 @@ fn search_manifest_files(root: &Path, files: &[&FileEntry], req: &RetrievalReque
             continue;
         }
         let line_index = best_line.unwrap_or(0);
-        let start = line_index.saturating_sub(2);
-        let end = (start + MAX_RANGE_LINES).min(lines.len());
-        let range_text = lines[start..end].join("\n");
+        let range = if let Some(chunk) = snapshot
+            .ast_chunks
+            .chunk_for_line(&entry.path, line_index + 1)
+        {
+            ast_chunk_range(snapshot, chunk).unwrap_or_else(|| {
+                let start = line_index.saturating_sub(2);
+                let end = (start + MAX_RANGE_LINES).min(lines.len());
+                ContextRange {
+                    start_line: start + 1,
+                    end_line: end,
+                    text: lines[start..end].join("\n"),
+                }
+            })
+        } else {
+            let start = line_index.saturating_sub(2);
+            let end = (start + MAX_RANGE_LINES).min(lines.len());
+            ContextRange {
+                start_line: start + 1,
+                end_line: end,
+                text: lines[start..end].join("\n"),
+            }
+        };
         candidates.push(Candidate {
             path: entry.path.clone(),
             content_hash: entry.content_hash.clone(),
             score: total_score,
-            range: ContextRange {
-                start_line: start + 1,
-                end_line: end,
-                text: range_text,
-            },
+            range,
             why: if path_score > 0 && best_line_score > 0 {
-                "path and content match current local snapshot".to_string()
+                "bm25:path+content".to_string()
             } else if path_score > 0 {
-                "path matches current local snapshot".to_string()
+                "bm25:path".to_string()
             } else {
-                "content matches current local snapshot".to_string()
+                "bm25:content".to_string()
             },
         });
     }
     candidates.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.path.cmp(&b.path)));
+    candidates
+}
+
+fn search_cold_or_stale_fallback(
+    root: &Path,
+    req: &RetrievalRequest,
+) -> Result<Option<(Manifest, Vec<Candidate>)>> {
+    let rules = IgnoreRules::load(root)?;
+    let scan = discover_filter_hash(root, &rules)?;
+    if scan.files.is_empty() {
+        return Ok(None);
+    }
+    let manifest = build_manifest(root, &rules, scan.files)?;
+    let candidates = search_manifest_files_from_entries(root, &manifest, &req.query)?;
+    Ok(Some((manifest, candidates)))
+}
+
+fn search_manifest_files_from_entries(
+    root: &Path,
+    manifest: &Manifest,
+    query: &str,
+) -> Result<Vec<Candidate>> {
+    let terms = query_terms(query);
+    if terms.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut candidates = Vec::new();
+    for entry in manifest.files.values() {
+        let text = fs::read_to_string(root.join(&entry.path)).unwrap_or_default();
+        let path_score = score_text(&entry.path, &terms) * 3;
+        let content_score = score_text(&text, &terms);
+        if path_score + content_score == 0 {
+            continue;
+        }
+        let lines: Vec<_> = text.lines().collect();
+        let mut best_line = 0usize;
+        let mut best_line_score = 0usize;
+        for (index, line) in lines.iter().enumerate() {
+            let score = score_text(line, &terms);
+            if score > best_line_score {
+                best_line = index;
+                best_line_score = score;
+            }
+        }
+        let start = best_line.saturating_sub(2);
+        let end = (start + MAX_RANGE_LINES).min(lines.len());
+        candidates.push(Candidate {
+            path: entry.path.clone(),
+            content_hash: entry.content_hash.clone(),
+            score: path_score + content_score + best_line_score,
+            range: ContextRange {
+                start_line: start + 1,
+                end_line: end,
+                text: lines[start..end].join("\n"),
+            },
+            why: "targeted fallback scan matched current disk".to_string(),
+        });
+    }
+    candidates.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.path.cmp(&b.path)));
+    candidates.truncate(50);
     Ok(candidates)
 }
 
+fn candidate_matches_disk(root: &Path, candidate: &Candidate) -> Result<bool> {
+    let bytes = match fs::read(root.join(&candidate.path)) {
+        Ok(bytes) => bytes,
+        Err(_) => return Ok(false),
+    };
+    let hash = format!("sha256:{}", jcode_codebase_sync::sha256_hex(&bytes));
+    Ok(hash == candidate.content_hash)
+}
+
+struct HybridReranker<'a> {
+    req: &'a RetrievalRequest,
+    weights: &'a SourceWeights,
+    graph_distances: &'a HashMap<String, usize>,
+    intent: &'a QueryIntent,
+}
+
+impl<'a> HybridReranker<'a> {
+    fn new(
+        req: &'a RetrievalRequest,
+        weights: &'a SourceWeights,
+        graph_distances: &'a HashMap<String, usize>,
+        intent: &'a QueryIntent,
+    ) -> Self {
+        Self {
+            req,
+            weights,
+            graph_distances,
+            intent,
+        }
+    }
+
+    fn rank(&self, candidates: &mut [Candidate]) {
+        let query = term_set(&self.req.query);
+        for candidate in candidates.iter_mut() {
+            let mut reasons = Vec::new();
+            let content = term_set(&format!("{}\n{}", candidate.path, candidate.range.text));
+            let overlap = query.intersection(&content).count();
+            let union = query.union(&content).count().max(1);
+            let overlap_score = overlap * 100 / union;
+            if overlap_score > 0 {
+                candidate.score += overlap_score;
+                reasons.push(format!("overlap={}", overlap_score));
+            }
+            let source_bonus = source_weight_bonus(&candidate.why, self.weights);
+            if source_bonus > 0 {
+                candidate.score += source_bonus;
+                reasons.push(format!("source={}", source_bonus));
+            }
+            let path_bonus = path_match_bonus(&candidate.path, &query);
+            if path_bonus > 0 {
+                candidate.score += path_bonus;
+                reasons.push(format!("path={}", path_bonus));
+            }
+            if self.req.active_file.as_deref() == Some(candidate.path.as_str()) {
+                candidate.score += 75;
+                reasons.push("active_file=75".to_string());
+            }
+            let graph_bonus = graph_distance_bonus(
+                &candidate.path,
+                self.req.active_file.as_deref(),
+                self.graph_distances,
+            );
+            if graph_bonus > 0 {
+                candidate.score += graph_bonus;
+                reasons.push(format!("graph={}", graph_bonus));
+            }
+            let package_bonus =
+                same_package_bonus(&candidate.path, self.req.active_file.as_deref());
+            if package_bonus > 0 {
+                candidate.score += package_bonus;
+                reasons.push(format!("package={}", package_bonus));
+            }
+            let intent_bonus = test_config_bonus(&candidate.path, self.intent);
+            if intent_bonus > 0 {
+                candidate.score += intent_bonus;
+                reasons.push(format!("intent={}", intent_bonus));
+            }
+            if is_generated_or_vendor_path(&candidate.path) {
+                candidate.score = candidate.score.saturating_sub(100);
+                reasons.push("generated_penalty=100".to_string());
+            }
+            if !reasons.is_empty() {
+                candidate.why = format!("{}; {}", candidate.why, reasons.join(","));
+            }
+        }
+        candidates.sort_by(|a, b| {
+            b.score
+                .cmp(&a.score)
+                .then_with(|| a.path.cmp(&b.path))
+                .then_with(|| a.range.start_line.cmp(&b.range.start_line))
+        });
+    }
+}
+
+#[cfg(test)]
 fn rerank_candidates(
     candidates: &mut [Candidate],
     req: &RetrievalRequest,
     weights: &SourceWeights,
     graph_distances: &HashMap<String, usize>,
-    intent: &query_planner::QueryIntent,
+    intent: &QueryIntent,
 ) {
-    let query = term_set(&req.query);
-    for candidate in candidates.iter_mut() {
-        let content = term_set(&format!("{}\n{}", candidate.path, candidate.range.text));
-        let overlap = query.intersection(&content).count();
-        let union = query.union(&content).count().max(1);
-        candidate.score += overlap * 100 / union;
-        if req.active_file.as_deref() == Some(candidate.path.as_str()) {
-            candidate.score += 25;
-        }
-        if is_generated_or_vendor_path(&candidate.path) {
-            candidate.score = candidate.score.saturating_sub(50);
-        }
-        candidate.score += source_weight_bonus(&candidate.why, weights);
-        candidate.score += graph_distance_bonus(&candidate.path,
-            req.active_file.as_deref(),
-            graph_distances,
-        );
-        candidate.score += same_package_bonus(&candidate.path,
-            req.active_file.as_deref(),
-        );
-        candidate.score += test_config_bonus(&candidate.path,
-            intent,
-        );
-    }
-    candidates.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.path.cmp(&b.path)));
+    HybridReranker::new(req, weights, graph_distances, intent).rank(candidates);
 }
 
 fn graph_distance_bonus(
@@ -579,6 +938,24 @@ fn same_package_bonus(candidate_path: &str, active_file: Option<&str>) -> usize 
     common.saturating_sub(1) * 10
 }
 
+fn path_match_bonus(candidate_path: &str, query_terms: &HashSet<String>) -> usize {
+    let path_terms = term_set(candidate_path);
+    let matches = query_terms.intersection(&path_terms).count();
+    let basename = Path::new(candidate_path)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(candidate_path)
+        .to_lowercase();
+    let exact_basename = query_terms.contains(&basename);
+    let stem = basename
+        .split('.')
+        .next()
+        .unwrap_or(basename.as_str())
+        .to_string();
+    let exact_stem = query_terms.contains(&stem);
+    matches * 120 + usize::from(exact_basename) * 1_000 + usize::from(exact_stem) * 750
+}
+
 fn test_config_bonus(candidate_path: &str, intent: &query_planner::QueryIntent) -> usize {
     let is_test = candidate_path.contains("/test") || candidate_path.ends_with("_test.rs");
     let is_config = candidate_path.ends_with(".toml")
@@ -598,13 +975,15 @@ fn test_config_bonus(candidate_path: &str, intent: &query_planner::QueryIntent) 
 fn source_weight_bonus(why: &str, weights: &SourceWeights) -> usize {
     if why == "unsaved buffer matches current editor state" {
         weights.unsaved_buffer.max(0) as usize
-    } else if why == "saved local overlay matches current snapshot" {
+    } else if why.starts_with("saved local overlay") {
         weights.overlay.max(0) as usize
-    } else if why.starts_with("symbol definition match:") {
+    } else if why.starts_with("symbol:name:") {
+        weights.symbol.max(0) as usize
+    } else if why.starts_with("ast:") {
         weights.symbol.max(0) as usize
     } else if why == "exact local vector match current snapshot" {
         weights.vector.max(0) as usize
-    } else if why == "dependency graph neighbor" {
+    } else if why.starts_with("dependency graph neighbor") {
         weights.graph_neighbor.max(0) as usize
     } else {
         weights.manifest.max(0) as usize
@@ -620,6 +999,37 @@ fn is_generated_or_vendor_path(path: &str) -> bool {
         || path.contains("/vendor/")
         || path.contains("/dist/")
         || path.ends_with(".min.js")
+}
+
+fn dedupe_candidates(candidates: &mut Vec<Candidate>) {
+    let mut deduped = BTreeMap::<(String, usize, usize), Candidate>::new();
+    for candidate in candidates.drain(..) {
+        let key = (
+            candidate.path.clone(),
+            candidate.range.start_line,
+            candidate.range.end_line,
+        );
+        match deduped.get_mut(&key) {
+            Some(existing) if candidate.score > existing.score => {
+                let previous_why = existing.why.clone();
+                *existing = candidate;
+                existing.why = format!("{}; dedup:{}", existing.why, previous_why);
+            }
+            Some(existing) => {
+                existing.why = format!("{}; dedup:{}", existing.why, candidate.why);
+            }
+            None => {
+                deduped.insert(key, candidate);
+            }
+        }
+    }
+    candidates.extend(deduped.into_values());
+    candidates.sort_by(|a, b| {
+        b.score
+            .cmp(&a.score)
+            .then_with(|| a.path.cmp(&b.path))
+            .then_with(|| a.range.start_line.cmp(&b.range.start_line))
+    });
 }
 
 fn compress_candidates(candidates: Vec<Candidate>, token_budget: usize) -> ContextPack {
@@ -675,7 +1085,10 @@ fn query_terms(query: &str) -> Vec<String> {
 
 fn score_text(text: &str, terms: &[String]) -> usize {
     let haystack = text.to_lowercase();
-    terms.iter().filter(|term| haystack.contains(term.as_str())).count()
+    terms
+        .iter()
+        .filter(|term| haystack.contains(term.as_str()))
+        .count()
 }
 
 fn is_safe_relative_path(path: &str) -> bool {
@@ -700,7 +1113,7 @@ pub fn root_from_context_path(path: Option<PathBuf>) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use jcode_codebase_sync::ManifestStore;
+    use jcode_codebase_sync::{IndexStore, ManifestStore};
     use tempfile::TempDir;
 
     fn write(path: &Path, text: &str) {
@@ -729,7 +1142,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let store = TempDir::new().unwrap();
         write(&dir.path().join("src/auth.rs"), "pub fn login() {}\n");
-        write(&dir.path().join("src/auth_test.rs"), "fn login_test() { login(); }\n");
+        write(
+            &dir.path().join("src/auth_test.rs"),
+            "fn login_test() { login(); }\n",
+        );
         let engine = CodebaseRetrievalEngine::new(CodebaseSyncEngine::new(ManifestStore::new(
             store.path().to_path_buf(),
         )));
@@ -744,7 +1160,13 @@ mod tests {
                 },
             )
             .unwrap();
-        assert!(response.context_pack.files.iter().any(|file| file.path == "src/auth.rs"));
+        assert!(
+            response
+                .context_pack
+                .files
+                .iter()
+                .any(|file| file.path == "src/auth.rs")
+        );
     }
 
     #[test]
@@ -753,7 +1175,10 @@ mod tests {
         run_git_cmd(dir.path(), &["init"]);
         run_git_cmd(dir.path(), &["config", "user.email", "test@example.com"]);
         run_git_cmd(dir.path(), &["config", "user.name", "Test"]);
-        write(&dir.path().join("src/lib.rs"), "pub fn branch_symbol() { main_only(); }\n");
+        write(
+            &dir.path().join("src/lib.rs"),
+            "pub fn branch_symbol() { main_only(); }\n",
+        );
         run_git_cmd(dir.path(), &["add", "."]);
         run_git_cmd(dir.path(), &["commit", "-m", "main"]);
         let store = TempDir::new().unwrap();
@@ -771,9 +1196,16 @@ mod tests {
                 },
             )
             .unwrap();
-        assert!(main.context_pack.files[0].ranges[0].text.contains("main_only"));
+        assert!(
+            main.context_pack.files[0].ranges[0]
+                .text
+                .contains("main_only")
+        );
         run_git_cmd(dir.path(), &["checkout", "-b", "feature"]);
-        write(&dir.path().join("src/lib.rs"), "pub fn branch_symbol() { feature_only(); }\n");
+        write(
+            &dir.path().join("src/lib.rs"),
+            "pub fn branch_symbol() { feature_only(); }\n",
+        );
         run_git_cmd(dir.path(), &["add", "."]);
         run_git_cmd(dir.path(), &["commit", "-m", "feature"]);
         let feature = engine
@@ -787,8 +1219,16 @@ mod tests {
                 },
             )
             .unwrap();
-        assert!(feature.context_pack.files[0].ranges[0].text.contains("feature_only"));
-        assert!(!feature.context_pack.files[0].ranges[0].text.contains("main_only"));
+        assert!(
+            feature.context_pack.files[0].ranges[0]
+                .text
+                .contains("feature_only")
+        );
+        assert!(
+            !feature.context_pack.files[0].ranges[0]
+                .text
+                .contains("main_only")
+        );
     }
 
     #[test]
@@ -815,14 +1255,60 @@ mod tests {
             )
             .unwrap();
         assert_eq!(response.context_pack.files[0].path, "src/auth.rs");
-        assert!(response.context_pack.files[0].ranges[0].text.contains("login"));
+        assert!(
+            response.context_pack.files[0].ranges[0]
+                .text
+                .contains("login")
+        );
+    }
+
+    #[test]
+    fn hot_query_reuses_persisted_index_snapshot() {
+        let dir = TempDir::new().unwrap();
+        let store = TempDir::new().unwrap();
+        write(
+            &dir.path().join("src/auth.rs"),
+            "pub fn login() {\n    validate_password();\n}\n",
+        );
+        let engine = CodebaseRetrievalEngine::new(CodebaseSyncEngine::new(ManifestStore::new(
+            store.path().to_path_buf(),
+        )));
+        engine
+            .search(
+                dir.path(),
+                RetrievalRequest {
+                    query: "login validation".to_string(),
+                    active_file: None,
+                    token_budget: None,
+                    unsaved_buffers: Vec::new(),
+                },
+            )
+            .unwrap();
+        let index_path = IndexStore::new(store.path().to_path_buf()).snapshot_path(dir.path());
+        let before = fs::read_to_string(&index_path).unwrap();
+        engine
+            .search(
+                dir.path(),
+                RetrievalRequest {
+                    query: "login validation".to_string(),
+                    active_file: None,
+                    token_budget: None,
+                    unsaved_buffers: Vec::new(),
+                },
+            )
+            .unwrap();
+        let after = fs::read_to_string(&index_path).unwrap();
+        assert_eq!(before, after);
     }
 
     #[test]
     fn unsaved_buffer_result_is_preferred() {
         let dir = TempDir::new().unwrap();
         let store = TempDir::new().unwrap();
-        write(&dir.path().join("src/auth.rs"), "pub fn login() { saved_version(); }\n");
+        write(
+            &dir.path().join("src/auth.rs"),
+            "pub fn login() { saved_version(); }\n",
+        );
         let engine = CodebaseRetrievalEngine::new(CodebaseSyncEngine::new(ManifestStore::new(
             store.path().to_path_buf(),
         )));
@@ -841,11 +1327,16 @@ mod tests {
             )
             .unwrap();
         assert_eq!(response.context_pack.files[0].path, "src/auth.rs");
-        assert_eq!(
-            response.context_pack.files[0].why_included,
-            "unsaved buffer matches current editor state"
+        assert!(
+            response.context_pack.files[0]
+                .why_included
+                .starts_with("unsaved buffer matches current editor state")
         );
-        assert!(response.context_pack.files[0].ranges[0].text.contains("unsaved_version"));
+        assert!(
+            response.context_pack.files[0].ranges[0]
+                .text
+                .contains("unsaved_version")
+        );
         assert!(response.freshness.unsaved_buffers_included);
     }
 
@@ -949,8 +1440,14 @@ mod tests {
     fn active_file_boost_reranks_candidates() {
         let dir = TempDir::new().unwrap();
         let store = TempDir::new().unwrap();
-        write(&dir.path().join("src/auth.rs"), "pub fn shared_term() { auth_login(); }\n");
-        write(&dir.path().join("src/other.rs"), "pub fn shared_term() { other_login(); }\n");
+        write(
+            &dir.path().join("src/auth.rs"),
+            "pub fn shared_term() { auth_login(); }\n",
+        );
+        write(
+            &dir.path().join("src/other.rs"),
+            "pub fn shared_term() { other_login(); }\n",
+        );
         let engine = CodebaseRetrievalEngine::new(CodebaseSyncEngine::new(ManifestStore::new(
             store.path().to_path_buf(),
         )));
@@ -973,7 +1470,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let store = TempDir::new().unwrap();
         let fixture = dir.path().join("eval.json");
-        write(&dir.path().join("src/auth.rs"), "pub fn login() { validate_password(); }\n");
+        write(
+            &dir.path().join("src/auth.rs"),
+            "pub fn login() { validate_password(); }\n",
+        );
         write(
             &fixture,
             r#"[{"query":"password validation","expected_files":["src/auth.rs"]}]"#,
@@ -991,8 +1491,14 @@ mod tests {
     fn eval_reports_recall_at_5() {
         let dir = TempDir::new().unwrap();
         let store = TempDir::new().unwrap();
-        write(&dir.path().join("src/auth.rs"), "pub fn login() { validate_password(); }\n");
-        write(&dir.path().join("src/billing.rs"), "pub fn charge_card() {}\n");
+        write(
+            &dir.path().join("src/auth.rs"),
+            "pub fn login() { validate_password(); }\n",
+        );
+        write(
+            &dir.path().join("src/billing.rs"),
+            "pub fn charge_card() {}\n",
+        );
         let engine = CodebaseRetrievalEngine::new(CodebaseSyncEngine::new(ManifestStore::new(
             store.path().to_path_buf(),
         )));
@@ -1002,6 +1508,10 @@ mod tests {
                 &[RetrievalEvalCase {
                     query: "password validation".to_string(),
                     expected_files: vec!["src/auth.rs".to_string()],
+                    intent: None,
+                    active_file: None,
+                    must_not_return: Vec::new(),
+                    category: None,
                 }],
             )
             .unwrap();
@@ -1013,7 +1523,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "slow: runs on full repo"]
     fn eval_real_repo_recall_at_5_above_threshold() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
@@ -1031,11 +1540,37 @@ mod tests {
         }
         let report = engine.eval_fixture(&root, &fixture).unwrap();
         assert!(
-            report.recall_at_5_rate_bps >= 6_000,
-            "Recall@5 {} bps below 60% threshold. cases={} hits={}",
+            report.cases_total >= 50,
+            "retrieval eval fixture must contain at least 50 cases; got {}",
+            report.cases_total
+        );
+        assert!(
+            report.recall_at_5_rate_bps >= 8_500,
+            "Recall@5 {} bps below 85% threshold. cases={} hits={} missing={:?}",
             report.recall_at_5_rate_bps,
             report.cases_total,
-            report.recall_at_5_hits
+            report.recall_at_5_hits,
+            report.missing_expected
+        );
+        assert!(
+            report.recall_at_20_rate_bps >= 9_500,
+            "Recall@20 {} bps below 95% threshold. cases={} hits={} missing={:?}",
+            report.recall_at_20_rate_bps,
+            report.cases_total,
+            report.recall_at_20_hits,
+            report.missing_expected
+        );
+        assert_eq!(
+            report.stale_context_count, 0,
+            "stale context leaked into eval"
+        );
+        assert_eq!(
+            report.unauthorized_candidate_count, 0,
+            "unauthorized context leaked into eval"
+        );
+        assert_eq!(
+            report.forbidden_context_count, 0,
+            "forbidden context leaked into eval"
         );
     }
 
@@ -1111,10 +1646,7 @@ mod tests {
                 },
             )
             .unwrap();
-        assert_eq!(
-            response.context_pack.files[0].why_included,
-            "saved local overlay matches current snapshot"
-        );
+        assert_eq!(response.context_pack.files[0].path, "src/auth.rs");
     }
 
     #[test]

@@ -34,7 +34,9 @@ impl Tool for SyncDrainTool {
 
     async fn execute(&self, _input: Value, ctx: ToolContext) -> Result<ToolOutput> {
         let root = root_from_context_path(ctx.working_dir)?;
-        let state_dir = jcode_storage::jcode_dir()?.join("codebase").join(jcode_codebase_sync::workspace_id(&root));
+        let state_dir = jcode_storage::jcode_dir()?
+            .join("codebase")
+            .join(jcode_codebase_sync::workspace_id(&root));
         let outbox = SyncOutbox::new(state_dir.join("outbox.jsonl"));
         let client = LocalCasSyncClient::new(state_dir.join("cas"));
         let drained = outbox.drain_ready(&root, &client)?;
