@@ -328,6 +328,10 @@ async fn perform_reveal(target: &ResolvedTarget) -> Result<OpenOutcome> {
 }
 
 async fn open_target(target: &ResolvedTarget) -> Result<String> {
+    if crate::util::system_open_suppressed_for_tests() {
+        return Ok("suppressed-in-test".to_string());
+    }
+
     #[cfg(target_os = "macos")]
     {
         let mut cmd = Command::new("open");
@@ -364,6 +368,10 @@ async fn open_target(target: &ResolvedTarget) -> Result<String> {
 }
 
 async fn reveal_target(path: &Path, kind: LocalTargetKind) -> Result<(String, bool)> {
+    if crate::util::system_open_suppressed_for_tests() {
+        return Ok(("suppressed-in-test".to_string(), true));
+    }
+
     #[cfg(target_os = "macos")]
     {
         let mut cmd = Command::new("open");

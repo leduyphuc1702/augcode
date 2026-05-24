@@ -64,6 +64,31 @@ fn auth_status_default_all_not_configured() {
 }
 
 #[test]
+fn browser_is_suppressed_during_tests() {
+    assert!(browser_suppressed(false));
+}
+
+#[test]
+fn auth_login_browser_openers_are_centralized() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    for relative in [
+        "src/auth/oauth.rs",
+        "src/auth/google.rs",
+        "src/auth/gemini.rs",
+        "src/auth/antigravity.rs",
+        "src/cli/login.rs",
+        "src/tui/app/auth.rs",
+    ] {
+        let path = root.join(relative);
+        let source = std::fs::read_to_string(&path).expect("read source file");
+        assert!(
+            !source.contains("open::that(") && !source.contains("open::that_detached("),
+            "{relative} must use crate::auth::open_browser_for_auth* so tests cannot open real login tabs"
+        );
+    }
+}
+
+#[test]
 fn auth_status_check_fast_includes_bedrock_probe() {
     let _lock = crate::storage::lock_test_env();
     let prev_bedrock_enable = std::env::var_os("JCODE_BEDROCK_ENABLE");

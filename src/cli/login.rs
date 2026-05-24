@@ -1365,11 +1365,7 @@ async fn login_google_flow(no_browser: bool) -> Result<()> {
 }
 
 fn maybe_open_browser(target: &str, no_browser: bool) -> bool {
-    if crate::auth::browser_suppressed(no_browser) {
-        false
-    } else {
-        open::that(target).is_ok()
-    }
+    crate::auth::open_browser_for_auth(target, no_browser)
 }
 
 #[cfg(test)]

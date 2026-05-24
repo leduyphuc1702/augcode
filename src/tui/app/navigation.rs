@@ -48,6 +48,11 @@ impl App {
     }
 
     pub(super) fn try_open_link_at(&mut self, column: u16, row: u16) -> bool {
+        if crate::util::system_open_suppressed_for_tests() {
+            return self.try_open_link_at_with(column, row, |_| {
+                Err("system opener suppressed in test mode")
+            });
+        }
         self.try_open_link_at_with(column, row, |url| open::that_detached(url))
     }
 
@@ -647,6 +652,10 @@ impl App {
         let diagram = &diagrams[index];
         if let Some(path) = super::super::mermaid::get_cached_path(diagram.hash) {
             if path.exists() {
+                if crate::util::system_open_suppressed_for_tests() {
+                    self.set_status_notice("Open suppressed in test mode");
+                    return;
+                }
                 match open::that_detached(&path) {
                     Ok(_) => self.set_status_notice(format!(
                         "Opened diagram {}/{} in viewer",

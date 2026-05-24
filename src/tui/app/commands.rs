@@ -1399,6 +1399,12 @@ fn handle_transcript_command(app: &mut App, trimmed: &str) -> bool {
         return true;
     }
 
+    if crate::util::system_open_suppressed_for_tests() {
+        app.push_display_message(DisplayMessage::system(transcript_path_message(&path)));
+        app.set_status_notice("Open suppressed in test mode");
+        return true;
+    }
+
     match open::that_detached(&path) {
         Ok(()) => {
             app.push_display_message(DisplayMessage::system(transcript_opened_message(&path)));

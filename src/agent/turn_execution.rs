@@ -344,7 +344,7 @@ impl Agent {
         name: &str,
         input: serde_json::Value,
     ) -> Result<crate::tool::ToolOutput> {
-        self.validate_tool_allowed(name)?;
+        self.validate_tool_allowed_for_execution(name, false)?;
 
         let call_id = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -414,7 +414,15 @@ impl Agent {
     }
 
     pub(super) fn validate_tool_allowed(&self, name: &str) -> Result<()> {
-        if crate::agent_workflow::enabled() {
+        self.validate_tool_allowed_for_execution(name, true)
+    }
+
+    fn validate_tool_allowed_for_execution(
+        &self,
+        name: &str,
+        enforce_workflow: bool,
+    ) -> Result<()> {
+        if enforce_workflow && crate::agent_workflow::enabled() {
             let locked_names = self.locked_tools.as_ref().map(|locked| {
                 locked
                     .iter()

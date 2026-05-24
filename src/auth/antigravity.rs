@@ -242,7 +242,7 @@ pub async fn login(no_browser: bool) -> Result<AntigravityTokens> {
             eprintln!("{qr}\n");
         }
 
-        let browser_opened = open::that(&auth_url).is_ok();
+        let browser_opened = crate::auth::open_browser_for_auth(&auth_url, no_browser);
         if browser_opened {
             eprintln!(
                 "Waiting up to 300s for automatic callback on {}",
@@ -303,9 +303,7 @@ async fn manual_login(
     ) {
         eprintln!("{qr}\n");
     }
-    if !crate::auth::browser_suppressed(no_browser) {
-        let _ = open::that(auth_url);
-    }
+    crate::auth::open_browser_for_auth(auth_url, no_browser);
     eprintln!(
         "After approving access, paste the full callback URL (or query string) here so jcode can verify the login state.\n"
     );
