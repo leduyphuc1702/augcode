@@ -733,16 +733,19 @@ fn save_openai_compat_setting(app: &mut App, setting: OpenAiCompatSetting, value
     let (env_key, normalized_value) = match setting {
         OpenAiCompatSetting::ApiBase => {
             let normalized = match value {
-                Some(value) => match crate::provider_catalog::normalize_api_base(value) {
-                    Some(value) => Some(value),
-                    None => {
-                        app.push_display_message(DisplayMessage::error(
-                            "OpenAI-compatible API base must be https://... or http://localhost."
-                                .to_string(),
-                        ));
-                        return;
+                Some(value) => {
+                    match crate::provider_catalog::normalize_api_base_from_user_input(value) {
+                        Some(value) => Some(value),
+                        None => {
+                            let message = concat!(
+                                "OpenAI-compatible API base must be https://... ",
+                                "or a local/private http:// endpoint."
+                            );
+                            app.push_display_message(DisplayMessage::error(message.to_string()));
+                            return;
+                        }
                     }
-                },
+                }
                 None => None,
             };
             ("JCODE_OPENAI_COMPAT_API_BASE", normalized)

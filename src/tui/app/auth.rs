@@ -1649,18 +1649,20 @@ impl App {
             PendingLogin::OpenAiCompatibleApiBase { profile } => {
                 let api_base = input.trim();
                 if !api_base.is_empty() {
-                    let normalized = match crate::provider_catalog::normalize_api_base(api_base) {
-                        Some(value) => value,
-                        None => {
-                            self.push_display_message(DisplayMessage::error(
-                                "OpenAI-compatible API base must be https://... or http://localhost."
-                                    .to_string(),
-                            ));
-                            self.pending_login =
-                                Some(PendingLogin::OpenAiCompatibleApiBase { profile });
-                            return;
-                        }
-                    };
+                    let normalized =
+                        match crate::provider_catalog::normalize_api_base_from_user_input(api_base)
+                        {
+                            Some(value) => value,
+                            None => {
+                                self.push_display_message(DisplayMessage::error(
+                                    "OpenAI-compatible API base must be https://... or a local/private http:// endpoint."
+                                        .to_string(),
+                                ));
+                                self.pending_login =
+                                    Some(PendingLogin::OpenAiCompatibleApiBase { profile });
+                                return;
+                            }
+                        };
                     if let Err(err) = crate::provider_catalog::save_env_value_to_env_file(
                         "JCODE_OPENAI_COMPAT_API_BASE",
                         crate::provider_catalog::OPENAI_COMPAT_PROFILE.env_file,
@@ -2319,9 +2321,12 @@ fn save_tui_openai_compatible_api_base(
 ) -> anyhow::Result<crate::provider_catalog::ResolvedOpenAiCompatibleProfile> {
     let trimmed = api_base.trim();
     if !trimmed.is_empty() {
-        let normalized = crate::provider_catalog::normalize_api_base(trimmed).ok_or_else(|| {
-            anyhow::anyhow!("OpenAI-compatible API base must be https://... or http://localhost.")
-        })?;
+        let normalized = crate::provider_catalog::normalize_api_base_from_user_input(trimmed)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "OpenAI-compatible API base must be https://... or a local/private http:// endpoint."
+                )
+            })?;
         crate::provider_catalog::save_env_value_to_env_file(
             "JCODE_OPENAI_COMPAT_API_BASE",
             crate::provider_catalog::OPENAI_COMPAT_PROFILE.env_file,

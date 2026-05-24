@@ -81,6 +81,17 @@ fn tui_openai_compatible_api_base_accepts_localhost_override() -> anyhow::Result
 }
 
 #[test]
+fn tui_openai_compatible_api_base_accepts_pasted_prompt_line() -> anyhow::Result<()> {
+    with_temp_jcode_home(|| {
+        let resolved =
+            save_tui_openai_compatible_api_base("Current API base: `http://localhost:20128/v1`")?;
+        assert_eq!(resolved.api_base, "http://localhost:20128/v1");
+        assert!(!resolved.requires_api_key);
+        Ok(())
+    })
+}
+
+#[test]
 fn tui_openai_compatible_api_base_keeps_jcode_docs_and_remote_endpoint() -> anyhow::Result<()> {
     with_temp_jcode_home(|| {
         let resolved = save_tui_openai_compatible_api_base("https://api.deepseek.com/")?;
