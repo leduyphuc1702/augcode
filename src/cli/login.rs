@@ -765,10 +765,10 @@ fn login_openai_compatible_flow(
             None => read_line_trimmed(&format!("API base URL [{}]: ", resolved.api_base))?,
         };
         if !api_base_input.is_empty() {
-            let normalized = crate::provider_catalog::normalize_api_base(&api_base_input)
+            let normalized = crate::provider_catalog::normalize_api_base_from_user_input(&api_base_input)
                 .ok_or_else(|| {
                     anyhow::anyhow!(
-                        "Invalid OpenAI-compatible API base. Use https://... or http://localhost..."
+                        "Invalid OpenAI-compatible API base. Use https://... or a local/private http:// endpoint."
                     )
                 })?;
             crate::provider_catalog::save_env_value_to_env_file(

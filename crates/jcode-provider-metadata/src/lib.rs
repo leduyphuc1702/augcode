@@ -246,6 +246,64 @@ pub fn normalize_api_base(raw: &str) -> Option<String> {
     Some(trimmed.trim_end_matches('/').to_string())
 }
 
+pub fn normalize_api_base_from_user_input(raw: &str) -> Option<String> {
+    if let Some(normalized) = normalize_api_base(raw) {
+        return Some(normalized);
+    }
+
+    normalize_labeled_api_base(raw).or_else(|| normalize_wrapped_api_base(raw))
+}
+
+fn normalize_labeled_api_base(raw: &str) -> Option<String> {
+    raw.lines().rev().find_map(|line| {
+        if line_has_api_base_label(line) {
+            first_url_candidate(line).and_then(normalize_api_base)
+        } else {
+            None
+        }
+    })
+}
+
+fn normalize_wrapped_api_base(raw: &str) -> Option<String> {
+    let candidate = raw
+        .trim()
+        .trim_matches(['`', '"', '\'', '<', '>', '(', ')', '[', ']', '{', '}'])
+        .trim_end_matches(['.', ',', ';']);
+    normalize_api_base(candidate)
+}
+
+fn first_url_candidate(raw: &str) -> Option<&str> {
+    let start = ["https://", "http://"]
+        .into_iter()
+        .filter_map(|scheme| raw.find(scheme))
+        .min()?;
+    let tail = &raw[start..];
+    let end = tail
+        .char_indices()
+        .find_map(|(idx, ch)| {
+            if idx > 0
+                && (ch.is_whitespace()
+                    || matches!(ch, '`' | '"' | '\'' | '<' | '>' | ')' | ']' | '}'))
+            {
+                Some(idx)
+            } else {
+                None
+            }
+        })
+        .unwrap_or(tail.len());
+
+    Some(tail[..end].trim_end_matches(['.', ',', ';']))
+}
+
+fn line_has_api_base_label(line: &str) -> bool {
+    let label = line.to_ascii_lowercase();
+    label.contains("api base")
+        || label.contains("base_url")
+        || label.contains("base-url")
+        || label.contains("endpoint:")
+        || label.contains("api endpoint")
+}
+
 fn allows_insecure_http_host(host: &str) -> bool {
     let host = host.trim();
     let host = host
@@ -314,6 +372,10 @@ mod tests {
     #[test]
     fn normalize_api_base_accepts_private_http_hosts() {
         assert_eq!(
+            normalize_api_base("http://localhost:20128/v1").as_deref(),
+            Some("http://localhost:20128/v1")
+        );
+        assert_eq!(
             normalize_api_base("http://192.168.1.25:8000/v1/").as_deref(),
             Some("http://192.168.1.25:8000/v1")
         );
@@ -339,6 +401,36 @@ mod tests {
     fn normalize_api_base_rejects_public_http_hosts() {
         assert_eq!(normalize_api_base("http://example.com/v1"), None);
         assert_eq!(normalize_api_base("http://8.8.8.8/v1"), None);
+    }
+
+    #[test]
+    fn normalize_api_base_from_user_input_accepts_pasted_tui_prompt() {
+        let input = "\
+OpenAI-compatible Endpoint
+
+Setup docs: https://github.com/1jehuang/jcode#openai-compatible-providers
+Current API base: `http://localhost:20128/v1`
+
+Paste the API base below.";
+
+        assert_eq!(
+            normalize_api_base_from_user_input(input).as_deref(),
+            Some("http://localhost:20128/v1")
+        );
+    }
+
+    #[test]
+    fn normalize_api_base_from_user_input_rejects_ambiguous_urls_without_api_base_label() {
+        let input = "Docs https://github.com/1jehuang/jcode and local http://localhost:20128/v1";
+
+        assert_eq!(normalize_api_base_from_user_input(input), None);
+    }
+
+    #[test]
+    fn normalize_api_base_from_user_input_rejects_setup_docs_line() {
+        let input = "Setup docs: https://github.com/1jehuang/jcode#openai-compatible-providers";
+
+        assert_eq!(normalize_api_base_from_user_input(input), None);
     }
 
     #[test]
