@@ -158,16 +158,135 @@ pub struct SymbolIndex {
     pub symbols: Vec<SymbolDefinition>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GraphNodeKind {
+    File,
+    Symbol,
+    Test,
+    Route,
+    Tool,
+    Package,
+    Unknown,
+}
+
+impl Default for GraphNodeKind {
+    fn default() -> Self {
+        Self::Unknown
+    }
+}
+
+impl GraphNodeKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::File => "file",
+            Self::Symbol => "symbol",
+            Self::Test => "test",
+            Self::Route => "route",
+            Self::Tool => "tool",
+            Self::Package => "package",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GraphEdgeKind {
+    Imports,
+    Contains,
+    Calls,
+    Tests,
+    HandlesRoute,
+    Fetches,
+    BelongsToPackage,
+    DependsOnPackage,
+    Definition,
+    Reference,
+    Implements,
+    Overrides,
+    TypeDependency,
+    Unknown,
+}
+
+impl Default for GraphEdgeKind {
+    fn default() -> Self {
+        Self::Unknown
+    }
+}
+
+impl GraphEdgeKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Imports => "imports",
+            Self::Contains => "contains",
+            Self::Calls => "calls",
+            Self::Tests => "tests",
+            Self::HandlesRoute => "handles_route",
+            Self::Fetches => "fetches",
+            Self::BelongsToPackage => "belongs_to_package",
+            Self::DependsOnPackage => "depends_on_package",
+            Self::Definition => "definition",
+            Self::Reference => "reference",
+            Self::Implements => "implements",
+            Self::Overrides => "overrides",
+            Self::TypeDependency => "type_dependency",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    pub fn from_kind(kind: &str) -> Self {
+        match kind {
+            "imports" | "import" => Self::Imports,
+            "contains" | "contains_symbol" => Self::Contains,
+            "calls" | "calls_symbol" => Self::Calls,
+            "tests" | "test_source" => Self::Tests,
+            "handles_route" => Self::HandlesRoute,
+            "fetches" => Self::Fetches,
+            "belongs_to_package" => Self::BelongsToPackage,
+            "depends_on_package" => Self::DependsOnPackage,
+            "definition" => Self::Definition,
+            "reference" => Self::Reference,
+            "implements" => Self::Implements,
+            "overrides" => Self::Overrides,
+            "type_dependency" => Self::TypeDependency,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GraphNode {
+    pub id: String,
+    pub kind: GraphNodeKind,
+    #[serde(default)]
+    pub label: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DependencyEdge {
     pub from: String,
     pub to: String,
     pub kind: String,
+    #[serde(default)]
+    pub from_kind: GraphNodeKind,
+    #[serde(default)]
+    pub to_kind: GraphNodeKind,
+    #[serde(default)]
+    pub edge_kind: GraphEdgeKind,
+    #[serde(default = "default_graph_confidence")]
+    pub confidence: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DependencyGraph {
+    #[serde(default)]
+    pub nodes: Vec<GraphNode>,
     pub edges: Vec<DependencyEdge>,
+}
+
+fn default_graph_confidence() -> String {
+    "heuristic".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -197,6 +316,8 @@ pub struct IndexSnapshot {
     pub schema_version: u32,
     pub manifest: Manifest,
     pub overlay: LocalOverlayIndex,
+    #[serde(default)]
+    pub vector: ExactVectorIndex,
     pub lexical: LexicalIndexData,
     pub symbols: SymbolIndex,
     pub graph: DependencyGraph,
@@ -632,6 +753,67 @@ impl DependencyGraph {
     pub fn rebuild(root: &Path, manifest: &Manifest) -> Result<Self> {
         build_dependency_graph(root, manifest)
     }
+
+    pub fn add_node(&mut self, id: impl Into<String>, kind: GraphNodeKind) {
+        let id = id.into();
+        if self.nodes.iter().any(|node| node.id == id) {
+            return;
+        }
+        self.nodes.push(GraphNode {
+            label: id.clone(),
+            id,
+            kind,
+        });
+    }
+
+    pub fn add_edge(
+        &mut self,
+        from: impl Into<String>,
+        to: impl Into<String>,
+        from_kind: GraphNodeKind,
+        to_kind: GraphNodeKind,
+        edge_kind: GraphEdgeKind,
+    ) {
+        self.add_edge_with_confidence(from, to, from_kind, to_kind, edge_kind, "heuristic");
+    }
+
+    pub fn add_edge_with_confidence(
+        &mut self,
+        from: impl Into<String>,
+        to: impl Into<String>,
+        from_kind: GraphNodeKind,
+        to_kind: GraphNodeKind,
+        edge_kind: GraphEdgeKind,
+        confidence: impl Into<String>,
+    ) {
+        let from = from.into();
+        let to = to.into();
+        self.add_node(from.clone(), from_kind);
+        self.add_node(to.clone(), to_kind);
+        self.edges.push(DependencyEdge {
+            from,
+            to,
+            kind: edge_kind.as_str().to_string(),
+            from_kind,
+            to_kind,
+            edge_kind,
+            confidence: confidence.into(),
+        });
+    }
+}
+
+impl DependencyEdge {
+    pub fn normalized_kind(&self) -> GraphEdgeKind {
+        if self.edge_kind == GraphEdgeKind::Unknown {
+            GraphEdgeKind::from_kind(&self.kind)
+        } else {
+            self.edge_kind
+        }
+    }
+
+    pub fn matches_kind(&self, kind: GraphEdgeKind) -> bool {
+        self.normalized_kind() == kind
+    }
 }
 
 impl SymbolIndex {
@@ -721,6 +903,10 @@ impl ExactVectorIndex {
         Self { entries }
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
     pub fn search(&self, query: &str, limit: usize) -> Vec<ExactVectorHit> {
         let query_vector = embed_text(query);
         let mut hits: Vec<_> = self
@@ -747,7 +933,9 @@ impl ExactVectorIndex {
 
 impl LexicalIndexData {
     pub fn add_document(&mut self, path: &str, content_hash: &str, text: &str) {
-        self.remove_document(path);
+        if self.docs.contains_key(path) {
+            self.remove_document(path);
+        }
         let doc_text = format!("{} {} {}", path, path.replace('/', " "), text);
         let terms = query_terms(&doc_text);
         let mut local_tf = BTreeMap::<String, usize>::new();
@@ -905,6 +1093,16 @@ impl LocalOverlayIndex {
 
     pub fn search(&self, query: &str, limit: usize) -> Vec<OverlayHit> {
         search_chunks(&self.chunks_by_path, query, limit)
+    }
+
+    pub fn chunks(&self) -> impl Iterator<Item = &OverlayChunk> {
+        self.chunks_by_path
+            .values()
+            .flat_map(|chunks| chunks.iter())
+    }
+
+    pub fn chunks_for_path(&self, path: &str) -> Option<&[OverlayChunk]> {
+        self.chunks_by_path.get(path).map(Vec::as_slice)
     }
 
     pub fn chunk_for_line(&self, path: &str, line: usize) -> Option<&OverlayChunk> {
@@ -1343,6 +1541,7 @@ impl IndexStore {
         };
         snapshot.manifest = manifest.clone();
         snapshot.overlay.apply_delta(root, delta)?;
+        snapshot.vector = ExactVectorIndex::rebuild(&snapshot.overlay);
         snapshot.symbols.apply_delta(root, delta)?;
         snapshot.ast_chunks.apply_delta(root, delta)?;
         apply_lexical_delta(root, &mut snapshot.lexical, delta)?;
@@ -1394,6 +1593,7 @@ fn build_index_snapshot(
     let mut symbols = SymbolIndex::default();
     let mut ast_chunks = AstIndex::default();
     let mut lexical = LexicalIndexData::default();
+    let mut texts = BTreeMap::<String, String>::new();
     for entry in manifest.files.values() {
         let text = fs::read_to_string(root.join(&entry.path))
             .with_context(|| format!("read {}", root.join(&entry.path).display()))?;
@@ -1401,12 +1601,16 @@ fn build_index_snapshot(
         symbols.upsert_text(entry, &text);
         ast_chunks.upsert_text(entry, &text);
         lexical.add_document(&entry.path, &entry.content_hash, &text);
+        texts.insert(entry.path.clone(), text);
     }
+    let vector = ExactVectorIndex::rebuild(&overlay);
+    let graph = build_dependency_graph_from_parts(manifest, &texts, &symbols.symbols, &ast_chunks);
     Ok(IndexSnapshot {
         schema_version: SCHEMA_VERSION,
-        graph: build_dependency_graph(root, manifest)?,
+        graph,
         manifest: manifest.clone(),
         overlay,
+        vector,
         lexical,
         symbols,
         ast_chunks,
@@ -1437,39 +1641,135 @@ fn apply_lexical_delta(root: &Path, lexical: &mut LexicalIndexData, delta: &Delt
 }
 
 fn build_dependency_graph(root: &Path, manifest: &Manifest) -> Result<DependencyGraph> {
-    let mut edges = Vec::new();
+    let mut texts = BTreeMap::<String, String>::new();
+    let mut symbols = Vec::<SymbolDefinition>::new();
+    let mut ast_chunks = AstIndex::default();
+    for (path, entry) in &manifest.files {
+        let text = fs::read_to_string(root.join(path))?;
+        symbols.extend(extract_symbols(entry, &text));
+        ast_chunks.upsert_text(entry, &text);
+        texts.insert(path.clone(), text);
+    }
+    Ok(build_dependency_graph_from_parts(
+        manifest,
+        &texts,
+        &symbols,
+        &ast_chunks,
+    ))
+}
+
+fn build_dependency_graph_from_parts(
+    manifest: &Manifest,
+    texts: &BTreeMap<String, String>,
+    symbols: &[SymbolDefinition],
+    ast_chunks: &AstIndex,
+) -> DependencyGraph {
+    let mut graph = DependencyGraph::default();
     let paths: HashSet<_> = manifest.files.keys().cloned().collect();
+    let call_index = call_symbol_index(symbols);
+    for path in manifest.files.keys() {
+        graph.add_node(path.clone(), graph_node_kind_for_path(path));
+        if let Some(package) = package_node_for_path(path) {
+            graph.add_edge(
+                path.clone(),
+                package,
+                graph_node_kind_for_path(path),
+                GraphNodeKind::Package,
+                GraphEdgeKind::BelongsToPackage,
+            );
+        }
+    }
+    for symbol in symbols {
+        graph.add_edge(
+            symbol.path.clone(),
+            symbol_node_id(symbol),
+            graph_node_kind_for_path(&symbol.path),
+            GraphNodeKind::Symbol,
+            GraphEdgeKind::Contains,
+        );
+    }
+    for (from, to) in ast::containment_edges(&ast_chunks.chunks) {
+        graph.add_edge(
+            from,
+            to,
+            GraphNodeKind::File,
+            GraphNodeKind::Symbol,
+            GraphEdgeKind::Contains,
+        );
+    }
     for path in manifest.files.keys() {
         if let Some(source) = test_source_path(path)
             && paths.contains(&source)
         {
-            edges.push(DependencyEdge {
-                from: path.clone(),
-                to: source,
-                kind: "test_source".to_string(),
-            });
+            graph.add_edge(
+                path.clone(),
+                source,
+                GraphNodeKind::Test,
+                GraphNodeKind::File,
+                GraphEdgeKind::Tests,
+            );
         }
-        let text = fs::read_to_string(root.join(path))?;
-        if let Some(entry) = manifest.files.get(path) {
-            let mut ast_index = AstIndex::default();
-            ast_index.upsert_text(entry, &text);
-            for (from, to) in ast::containment_edges(&ast_index.chunks) {
-                edges.push(DependencyEdge {
-                    from,
-                    to,
-                    kind: "contains_symbol".to_string(),
-                });
-            }
-        }
+        let Some(text) = texts.get(path) else {
+            continue;
+        };
         for target in extract_import_targets(path, &text, &paths) {
-            edges.push(DependencyEdge {
-                from: path.clone(),
-                to: target,
-                kind: "import".to_string(),
-            });
+            graph.add_edge(
+                path.clone(),
+                target,
+                graph_node_kind_for_path(path),
+                GraphNodeKind::File,
+                GraphEdgeKind::Imports,
+            );
+        }
+        for target in call_targets(path, text, &call_index) {
+            graph.add_edge(
+                path.clone(),
+                target,
+                graph_node_kind_for_path(path),
+                GraphNodeKind::File,
+                GraphEdgeKind::Calls,
+            );
+        }
+        for route in extract_fetch_routes(text) {
+            graph.add_edge(
+                path.clone(),
+                route,
+                graph_node_kind_for_path(path),
+                GraphNodeKind::Route,
+                GraphEdgeKind::Fetches,
+            );
+        }
+        for route in extract_route_handlers(path, text) {
+            graph.add_edge(
+                route,
+                path.clone(),
+                GraphNodeKind::Route,
+                graph_node_kind_for_path(path),
+                GraphEdgeKind::HandlesRoute,
+            );
+        }
+        for tool in extract_tool_names(text) {
+            graph.add_edge_with_confidence(
+                format!("tool:{tool}"),
+                path.clone(),
+                GraphNodeKind::Tool,
+                graph_node_kind_for_path(path),
+                GraphEdgeKind::HandlesRoute,
+                "exact",
+            );
         }
     }
-    Ok(DependencyGraph { edges })
+    for (from, to) in extract_package_dependency_edges(texts) {
+        graph.add_edge_with_confidence(
+            from,
+            to,
+            GraphNodeKind::Package,
+            GraphNodeKind::Package,
+            GraphEdgeKind::DependsOnPackage,
+            "exact",
+        );
+    }
+    graph
 }
 
 pub fn discover_filter_hash(root: &Path, rules: &IgnoreRules) -> Result<ScanResult> {
@@ -1902,6 +2202,365 @@ fn test_source_path(path: &str) -> Option<String> {
     None
 }
 
+fn call_symbol_index(symbols: &[SymbolDefinition]) -> HashMap<String, Vec<String>> {
+    let mut index = HashMap::<String, Vec<String>>::new();
+    for symbol in symbols {
+        if symbol.name.len() < 3 || !matches!(symbol.kind.as_str(), "function" | "method") {
+            continue;
+        }
+        index
+            .entry(symbol.name.clone())
+            .or_default()
+            .push(symbol.path.clone());
+    }
+    index
+}
+
+fn call_targets(path: &str, text: &str, call_index: &HashMap<String, Vec<String>>) -> Vec<String> {
+    let mut targets = Vec::new();
+    let mut seen = HashSet::new();
+    for name in call_names(text) {
+        let Some(paths) = call_index.get(&name) else {
+            continue;
+        };
+        for target in paths {
+            if target != path && seen.insert(target.clone()) {
+                targets.push(target.clone());
+                if targets.len() >= 64 {
+                    return targets;
+                }
+            }
+        }
+    }
+    targets
+}
+
+fn call_names(text: &str) -> HashSet<String> {
+    let mut names = HashSet::new();
+    let bytes = text.as_bytes();
+    for index in 0..bytes.len() {
+        if bytes[index] != b'(' {
+            continue;
+        }
+        let mut end = index;
+        while end > 0 && bytes[end - 1].is_ascii_whitespace() {
+            end -= 1;
+        }
+        let mut start = end;
+        while start > 0 {
+            let ch = bytes[start - 1];
+            if ch.is_ascii_alphanumeric() || ch == b'_' {
+                start -= 1;
+            } else {
+                break;
+            }
+        }
+        if end > start + 2
+            && let Ok(name) = std::str::from_utf8(&bytes[start..end])
+        {
+            names.insert(name.to_string());
+        }
+    }
+    names
+}
+
+fn graph_node_kind_for_path(path: &str) -> GraphNodeKind {
+    if path.contains("/test")
+        || path.contains("/tests/")
+        || path.ends_with("_test.rs")
+        || path.ends_with(".test.ts")
+        || path.ends_with("_test.py")
+    {
+        GraphNodeKind::Test
+    } else {
+        GraphNodeKind::File
+    }
+}
+
+fn symbol_node_id(symbol: &SymbolDefinition) -> String {
+    format!("symbol:{}:{}:{}", symbol.path, symbol.kind, symbol.name)
+}
+
+fn package_node_for_path(path: &str) -> Option<String> {
+    let mut parts = path.split('/');
+    match (parts.next(), parts.next()) {
+        (Some("crates"), Some(name)) => Some(format!("package:crates/{name}")),
+        (Some("src" | "tests"), _) => Some("package:root".to_string()),
+        (Some(first), _) if path.ends_with("Cargo.toml") || path.ends_with("package.json") => {
+            Some(format!("package:{first}"))
+        }
+        _ => None,
+    }
+}
+
+fn extract_package_dependency_edges(texts: &BTreeMap<String, String>) -> Vec<(String, String)> {
+    let mut edges = Vec::new();
+    for (path, text) in texts {
+        if path.ends_with("Cargo.toml") {
+            edges.extend(extract_cargo_package_dependencies(path, text));
+        } else if path.ends_with("package.json") {
+            edges.extend(extract_npm_package_dependencies(path, text));
+        } else if path.ends_with("pyproject.toml") {
+            edges.extend(extract_python_package_dependencies(path, text));
+        } else if path.ends_with("go.mod") {
+            edges.extend(extract_go_package_dependencies(text));
+        } else if path.ends_with("pom.xml") {
+            edges.extend(extract_maven_package_dependencies(path, text));
+        } else if path.ends_with("build.gradle") || path.ends_with("build.gradle.kts") {
+            edges.extend(extract_gradle_package_dependencies(path, text));
+        }
+    }
+    edges.sort();
+    edges.dedup();
+    edges
+}
+
+fn extract_cargo_package_dependencies(path: &str, text: &str) -> Vec<(String, String)> {
+    let Ok(value) = text.parse::<toml::Value>() else {
+        return Vec::new();
+    };
+    let package = value
+        .get("package")
+        .and_then(|package| package.get("name"))
+        .and_then(toml::Value::as_str)
+        .map(|name| format!("package:{name}"))
+        .or_else(|| package_node_for_path(path))
+        .unwrap_or_else(|| "package:root".to_string());
+    let mut deps = Vec::new();
+    for table in ["dependencies", "dev-dependencies", "build-dependencies"] {
+        if let Some(items) = value.get(table).and_then(toml::Value::as_table) {
+            deps.extend(
+                items
+                    .keys()
+                    .map(|name| (package.clone(), format!("package:{name}"))),
+            );
+        }
+    }
+    deps
+}
+
+fn extract_npm_package_dependencies(path: &str, text: &str) -> Vec<(String, String)> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
+        return Vec::new();
+    };
+    let package = value
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .map(|name| format!("package:{name}"))
+        .or_else(|| package_node_for_path(path))
+        .unwrap_or_else(|| "package:root".to_string());
+    let mut deps = Vec::new();
+    for key in ["dependencies", "devDependencies", "peerDependencies"] {
+        if let Some(items) = value.get(key).and_then(serde_json::Value::as_object) {
+            deps.extend(
+                items
+                    .keys()
+                    .map(|name| (package.clone(), format!("package:{name}"))),
+            );
+        }
+    }
+    deps
+}
+
+fn extract_python_package_dependencies(path: &str, text: &str) -> Vec<(String, String)> {
+    let Ok(value) = text.parse::<toml::Value>() else {
+        return Vec::new();
+    };
+    let package = value
+        .get("project")
+        .and_then(|project| project.get("name"))
+        .and_then(toml::Value::as_str)
+        .map(|name| format!("package:{name}"))
+        .or_else(|| package_node_for_path(path))
+        .unwrap_or_else(|| "package:root".to_string());
+    let mut deps = Vec::new();
+    if let Some(items) = value
+        .get("project")
+        .and_then(|project| project.get("dependencies"))
+        .and_then(toml::Value::as_array)
+    {
+        deps.extend(
+            items
+                .iter()
+                .filter_map(toml::Value::as_str)
+                .filter_map(|dep| {
+                    dep.split(['=', '<', '>', '~', '!', '[', ' '])
+                        .next()
+                        .filter(|name| !name.is_empty())
+                        .map(|name| (package.clone(), format!("package:{name}")))
+                }),
+        );
+    }
+    if let Some(items) = value
+        .get("tool")
+        .and_then(|tool| tool.get("poetry"))
+        .and_then(|poetry| poetry.get("dependencies"))
+        .and_then(toml::Value::as_table)
+    {
+        deps.extend(
+            items
+                .keys()
+                .map(|name| (package.clone(), format!("package:{name}"))),
+        );
+    }
+    deps
+}
+
+fn extract_go_package_dependencies(text: &str) -> Vec<(String, String)> {
+    let package = text
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("module "))
+        .map(|name| format!("package:{}", name.trim()))
+        .unwrap_or_else(|| "package:go".to_string());
+    text.lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            let dep = if let Some(dep) = trimmed.strip_prefix("require ") {
+                dep.split_whitespace().next()
+            } else if trimmed.contains('.') && !trimmed.starts_with("//") {
+                trimmed.split_whitespace().next()
+            } else {
+                None
+            }?;
+            Some((package.clone(), format!("package:{dep}")))
+        })
+        .collect()
+}
+
+fn extract_maven_package_dependencies(path: &str, text: &str) -> Vec<(String, String)> {
+    let package = package_node_for_path(path).unwrap_or_else(|| "package:maven".to_string());
+    text.split("<dependency>")
+        .skip(1)
+        .filter_map(|chunk| {
+            let group = xml_tag_text(chunk, "groupId").unwrap_or_default();
+            let artifact = xml_tag_text(chunk, "artifactId")?;
+            let name = if group.is_empty() {
+                artifact
+            } else {
+                format!("{group}:{artifact}")
+            };
+            Some((package.clone(), format!("package:{name}")))
+        })
+        .collect()
+}
+
+fn extract_gradle_package_dependencies(path: &str, text: &str) -> Vec<(String, String)> {
+    let package = package_node_for_path(path).unwrap_or_else(|| "package:gradle".to_string());
+    text.lines()
+        .filter(|line| {
+            let trimmed = line.trim_start();
+            trimmed.starts_with("implementation ")
+                || trimmed.starts_with("api ")
+                || trimmed.starts_with("compileOnly ")
+                || trimmed.starts_with("testImplementation ")
+        })
+        .filter_map(|line| {
+            first_string_literal(line).map(|dep| (package.clone(), format!("package:{dep}")))
+        })
+        .collect()
+}
+
+fn xml_tag_text(chunk: &str, tag: &str) -> Option<String> {
+    let start_tag = format!("<{tag}>");
+    let end_tag = format!("</{tag}>");
+    let start = chunk.find(&start_tag)? + start_tag.len();
+    let end = chunk[start..].find(&end_tag)? + start;
+    Some(chunk[start..end].trim().to_string())
+}
+
+fn extract_tool_names(text: &str) -> Vec<String> {
+    if !text.contains("impl Tool for") {
+        return Vec::new();
+    }
+    let lines: Vec<_> = text.lines().collect();
+    let mut names = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        if !line.contains("fn name(") {
+            continue;
+        }
+        for candidate in lines.iter().skip(index + 1).take(6) {
+            if let Some(value) = first_string_literal(candidate.trim()) {
+                names.push(value);
+                break;
+            }
+        }
+    }
+    names.sort();
+    names.dedup();
+    names
+}
+
+fn extract_fetch_routes(text: &str) -> Vec<String> {
+    let mut routes = Vec::new();
+    for marker in ["fetch(\"", "fetch('"] {
+        let quote = marker.chars().last().unwrap_or('"');
+        for part in text.split(marker).skip(1) {
+            let route = part.split(quote).next().unwrap_or_default();
+            if route.starts_with('/') {
+                routes.push(format!("route:{route}"));
+            }
+        }
+    }
+    routes.sort();
+    routes.dedup();
+    routes
+}
+
+fn extract_route_handlers(path: &str, text: &str) -> Vec<String> {
+    let mut routes = Vec::new();
+    if let Some(route) = route_from_api_path(path) {
+        routes.push(route);
+    }
+    for marker in [
+        "route(\"", "route('", "get(\"", "get('", "post(\"", "post('",
+    ] {
+        let quote = marker.chars().last().unwrap_or('"');
+        for part in text.split(marker).skip(1) {
+            let route = part.split(quote).next().unwrap_or_default();
+            if route.starts_with('/') {
+                routes.push(format!("route:{route}"));
+            }
+        }
+    }
+    routes.sort();
+    routes.dedup();
+    routes
+}
+
+fn route_from_api_path(path: &str) -> Option<String> {
+    let marker = "/api/";
+    let start = path.find(marker).map(|index| index + 1)?;
+    let mut route = path[start..].to_string();
+    for suffix in [".ts", ".tsx", ".js", ".jsx", ".rs", ".py"] {
+        if let Some(stripped) = route.strip_suffix(suffix) {
+            route = stripped.to_string();
+            break;
+        }
+    }
+    if route.ends_with("/index") {
+        route.truncate(route.len() - "/index".len());
+    }
+    Some(format!("route:/{}", route))
+}
+
+fn first_string_literal(line: &str) -> Option<String> {
+    for quote in ['"', '\''] {
+        let Some(start_index) = line.find(quote) else {
+            continue;
+        };
+        let start = start_index + 1;
+        let Some(end_index) = line[start..].find(quote) else {
+            continue;
+        };
+        let end = end_index + start;
+        let value = &line[start..end];
+        if !value.is_empty() {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
 fn extract_import_targets(path: &str, text: &str, paths: &HashSet<String>) -> Vec<String> {
     let source_ext = Path::new(path).extension().and_then(|value| value.to_str());
     let base = Path::new(path).parent().unwrap_or_else(|| Path::new(""));
@@ -1987,13 +2646,40 @@ fn resolve_relative_import(
 }
 
 fn query_terms(query: &str) -> Vec<String> {
-    query
-        .split(|ch: char| !ch.is_alphanumeric() && ch != '-')
-        .filter_map(|term| {
-            let term = term.trim().to_lowercase();
-            (term.len() >= 2).then_some(term)
-        })
-        .collect()
+    let mut terms = Vec::new();
+    let mut seen = HashSet::new();
+    for raw in query.split(|ch: char| !ch.is_alphanumeric() && ch != '_' && ch != '-') {
+        push_query_term(raw, &mut terms, &mut seen);
+        for part in identifier_parts(raw) {
+            push_query_term(&part, &mut terms, &mut seen);
+        }
+    }
+    terms
+}
+
+fn identifier_parts(value: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    for segment in value.split(['_', '-']) {
+        let mut current = String::new();
+        for ch in segment.chars() {
+            if ch.is_ascii_uppercase() && !current.is_empty() {
+                parts.push(current);
+                current = String::new();
+            }
+            current.push(ch);
+        }
+        if !current.is_empty() {
+            parts.push(current);
+        }
+    }
+    parts
+}
+
+fn push_query_term(raw: &str, terms: &mut Vec<String>, seen: &mut HashSet<String>) {
+    let term = raw.trim().to_lowercase();
+    if term.len() >= 2 && seen.insert(term.clone()) {
+        terms.push(term);
+    }
 }
 
 fn score_text(text: &str, terms: &[String]) -> usize {
@@ -2473,6 +3159,10 @@ mod tests {
             "export function login() {}\n",
         );
         write(
+            &dir.path().join("src/service.rs"),
+            "pub fn run() { login(); }\n",
+        );
+        write(
             &dir.path().join("src/auth_test.rs"),
             "#[test]\nfn login_test() {}\n",
         );
@@ -2483,10 +3173,82 @@ mod tests {
         assert!(graph.edges.iter().any(|edge| {
             edge.from == "src/auth_test.rs"
                 && edge.to == "src/auth.rs"
-                && edge.kind == "test_source"
+                && edge.matches_kind(GraphEdgeKind::Tests)
         }));
         assert!(graph.edges.iter().any(|edge| {
-            edge.from == "src/app.ts" && edge.to == "src/auth.ts" && edge.kind == "import"
+            edge.from == "src/app.ts"
+                && edge.to == "src/auth.ts"
+                && edge.matches_kind(GraphEdgeKind::Imports)
+        }));
+        assert!(graph.edges.iter().any(|edge| {
+            edge.from == "src/service.rs"
+                && edge.to == "src/auth.rs"
+                && edge.matches_kind(GraphEdgeKind::Calls)
+        }));
+        assert!(graph.nodes.iter().any(|node| node.id == "package:root"));
+    }
+
+    #[test]
+    fn dependency_graph_detects_tools_routes_and_fetches() {
+        let dir = TempDir::new().unwrap();
+        write(
+            &dir.path().join("src/tool/codebase_search.rs"),
+            "impl Tool for CodebaseSearchTool {\nfn name(&self) -> &str {\n\"codebase_search\"\n}\n}\n",
+        );
+        write(
+            &dir.path().join("src/client.ts"),
+            "export function load() { return fetch('/api/users'); }\n",
+        );
+        write(
+            &dir.path().join("src/pages/api/users.ts"),
+            "export function GET() {}\n",
+        );
+        let rules = IgnoreRules::load(dir.path()).unwrap();
+        let scan = discover_filter_hash(dir.path(), &rules).unwrap();
+        let manifest = build_manifest(dir.path(), &rules, scan.files).unwrap();
+        let graph = DependencyGraph::rebuild(dir.path(), &manifest).unwrap();
+        assert!(graph.edges.iter().any(|edge| {
+            edge.from == "tool:codebase_search"
+                && edge.to == "src/tool/codebase_search.rs"
+                && edge.matches_kind(GraphEdgeKind::HandlesRoute)
+        }));
+        assert!(graph.edges.iter().any(|edge| {
+            edge.from == "src/client.ts"
+                && edge.to == "route:/api/users"
+                && edge.matches_kind(GraphEdgeKind::Fetches)
+        }));
+        assert!(graph.edges.iter().any(|edge| {
+            edge.from == "route:/api/users"
+                && edge.to == "src/pages/api/users.ts"
+                && edge.matches_kind(GraphEdgeKind::HandlesRoute)
+        }));
+    }
+
+    #[test]
+    fn dependency_graph_detects_package_dependencies() {
+        let dir = TempDir::new().unwrap();
+        write(
+            &dir.path().join("Cargo.toml"),
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n[dependencies]\nserde = \"1\"\n",
+        );
+        write(
+            &dir.path().join("web/package.json"),
+            r#"{"name":"web","dependencies":{"react":"18"}}"#,
+        );
+        let rules = IgnoreRules::load(dir.path()).unwrap();
+        let scan = discover_filter_hash(dir.path(), &rules).unwrap();
+        let manifest = build_manifest(dir.path(), &rules, scan.files).unwrap();
+        let graph = DependencyGraph::rebuild(dir.path(), &manifest).unwrap();
+        assert!(graph.edges.iter().any(|edge| {
+            edge.from == "package:demo"
+                && edge.to == "package:serde"
+                && edge.matches_kind(GraphEdgeKind::DependsOnPackage)
+                && edge.confidence == "exact"
+        }));
+        assert!(graph.edges.iter().any(|edge| {
+            edge.from == "package:web"
+                && edge.to == "package:react"
+                && edge.matches_kind(GraphEdgeKind::DependsOnPackage)
         }));
     }
 

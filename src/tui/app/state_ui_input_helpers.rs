@@ -755,6 +755,14 @@ impl App {
                     "/account openai-compatible api-base".into(),
                     "Set custom OpenAI-compatible API base",
                 ),
+                (
+                    "/account openai-compatible model add".into(),
+                    "Add custom OpenAI-compatible model",
+                ),
+                (
+                    "/account openai-compatible model remove".into(),
+                    "Remove custom OpenAI-compatible model",
+                ),
             ];
             for provider in crate::provider_catalog::login_providers() {
                 suggestions.push((
@@ -1175,6 +1183,8 @@ impl App {
                 | "/account switch"
                 | "/account openai"
                 | "/account openai-compatible"
+                | "/account openai-compatible model add"
+                | "/account openai-compatible model remove"
                 | "/account default-provider"
                 | "/account default-model"
                 | "/account claude switch"

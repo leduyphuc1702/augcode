@@ -21,6 +21,7 @@ members = [
     "crates/jcode-compaction-core",
     "crates/jcode-config-types",
     "crates/jcode-core",
+    "crates/jcode-code-intel",
     "crates/jcode-codebase-retrieval",
     "crates/jcode-codebase-sync",
     "crates/jcode-memory-types",
@@ -241,7 +242,7 @@ jemalloc-prof = [
     "tikv-jemallocator/profiling",
     "tikv-jemalloc-ctl/profiling",
 ]
-embeddings = ["dep:jcode-embedding"]
+embeddings = ["dep:jcode-embedding", "jcode-codebase-retrieval/embeddings"]
 mmdr-size-api = ["jcode-tui-mermaid/mmdr-size-api"]
 pdf = ["dep:jcode-pdf"]
 

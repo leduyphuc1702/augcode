@@ -1142,7 +1142,7 @@ mod tests {
 
     fn manifest(name: &str, desc: &str) -> CanonicalSkillManifest {
         let mapping = serde_yaml::Mapping::new();
-        CanonicalSkillManifest::from_input(ManifestInput {
+        let mut manifest = CanonicalSkillManifest::from_input(ManifestInput {
             name: name.to_string(),
             description: desc.to_string(),
             allowed_tools: Vec::new(),
@@ -1154,7 +1154,10 @@ mod tests {
             scope_dir: Some(PathBuf::from("/repo")),
             entrypoint_file: "SKILL.md".to_string(),
             frontmatter: &mapping,
-        })
+        });
+        manifest.skills_sh_id = Some(name.to_string());
+        manifest.quality_tier = Some("A".to_string());
+        manifest
     }
 
     #[test]

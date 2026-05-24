@@ -803,40 +803,21 @@ impl Provider for OpenRouterProvider {
             && cache.fetched
             && !cache.models.is_empty()
         {
-            if let Some(cache_age) = cache
-                .cached_at
-                .and_then(|cached_at| current_unix_secs().map(|now| now.saturating_sub(cached_at)))
-            {
-                self.maybe_schedule_model_catalog_refresh(cache_age, "display memory cache");
-            }
             return finalize(merge_static_models(
                 cache.models.iter().map(|m| m.id.clone()).collect(),
             ));
         }
 
         if let Some(cache_entry) = self.load_usable_model_disk_cache_entry() {
-            let cache_age = current_unix_secs()
-                .map(|now| now.saturating_sub(cache_entry.cached_at))
-                .unwrap_or(0);
             if let Ok(mut cache) = self.models_cache.try_write() {
                 cache.models = cache_entry.models.clone();
                 cache.fetched = true;
                 cache.cached_at = Some(cache_entry.cached_at);
             }
-            self.maybe_schedule_model_catalog_refresh(cache_age, "display disk cache");
             return finalize(merge_static_models(
                 cache_entry.models.into_iter().map(|m| m.id).collect(),
             ));
         }
-
-        // No memory or disk catalog yet. This commonly happens immediately after
-        // adding a new OpenAI-compatible endpoint from `/login`: the provider is
-        // hot-initialized, but the picker may render before the post-auth
-        // prefetch has completed. Make the picker path self-healing by starting
-        // the first `/models` fetch here, then return the best immediate
-        // fallback. The background refresh publishes ModelsUpdated, which
-        // invalidates/reopens the picker with the newly discovered models.
-        self.maybe_schedule_model_catalog_refresh(u64::MAX, "display cache miss");
 
         if !self.static_models.is_empty() {
             return finalize(with_current_model(self.static_models.clone()));

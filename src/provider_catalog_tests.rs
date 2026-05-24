@@ -135,6 +135,8 @@ fn auth_issue_runtime_display_name_tracks_direct_compatible_profiles() {
         "JCODE_NAMED_PROVIDER_PROFILE",
         "JCODE_PROVIDER_PROFILE_ACTIVE",
     ]);
+    crate::env::remove_var("JCODE_NAMED_PROVIDER_PROFILE");
+    crate::env::remove_var("JCODE_PROVIDER_PROFILE_ACTIVE");
 
     crate::env::set_var("JCODE_RUNTIME_PROVIDER", "azure-openai");
     assert_eq!(runtime_provider_display_name("openrouter"), "Azure OpenAI");
@@ -160,6 +162,7 @@ fn auth_profile_env_application_flushes_stale_openrouter_catalog_state() {
         "JCODE_OPENROUTER_MODEL_CATALOG",
         "JCODE_OPENROUTER_MODEL",
         "JCODE_OPENROUTER_STATIC_MODELS",
+        "JCODE_OPENAI_COMPAT_MODELS",
         "JCODE_OPENROUTER_AUTH_HEADER",
         "JCODE_OPENROUTER_AUTH_HEADER_NAME",
         "JCODE_OPENROUTER_DYNAMIC_BEARER_PROVIDER",
@@ -474,6 +477,7 @@ fn named_provider_profile_maps_to_openai_compatible_runtime_env() {
         "JCODE_OPENROUTER_MODEL_CATALOG",
         "JCODE_OPENROUTER_MODEL",
         "JCODE_OPENROUTER_STATIC_MODELS",
+        "JCODE_OPENAI_COMPAT_MODELS",
         "JCODE_OPENROUTER_AUTH_HEADER",
         "JCODE_OPENROUTER_AUTH_HEADER_NAME",
         "JCODE_NAMED_PROVIDER_PROFILE",
@@ -629,6 +633,7 @@ fn matrix_openai_compatible_profile_overrides_apply_when_valid() {
         "JCODE_OPENAI_COMPAT_API_KEY_NAME",
         "JCODE_OPENAI_COMPAT_ENV_FILE",
         "JCODE_OPENAI_COMPAT_DEFAULT_MODEL",
+        "JCODE_OPENAI_COMPAT_MODELS",
     ]);
 
     crate::env::set_var(
@@ -681,6 +686,7 @@ fn matrix_openai_compatible_profile_overrides_read_from_env_file() {
         "JCODE_OPENAI_COMPAT_API_KEY_NAME",
         "JCODE_OPENAI_COMPAT_ENV_FILE",
         "JCODE_OPENAI_COMPAT_DEFAULT_MODEL",
+        "JCODE_OPENAI_COMPAT_MODELS",
     ]);
     crate::env::set_var("JCODE_HOME", temp.path());
     crate::env::remove_var("JCODE_OPENAI_COMPAT_API_BASE");
@@ -788,5 +794,46 @@ fn load_api_key_accepts_legacy_zai_key_name() {
     assert_eq!(
         load_api_key_from_env_or_config("ZHIPU_API_KEY", "zai.env").as_deref(),
         Some("legacy-secret")
+    );
+}
+
+#[test]
+fn parse_openai_compatible_models_dedupes_commas_and_newlines() {
+    assert_eq!(
+        parse_openai_compatible_models(" model-a,model-b\nmodel-a\r\n model-c "),
+        vec![
+            "model-a".to_string(),
+            "model-b".to_string(),
+            "model-c".to_string()
+        ]
+    );
+}
+
+#[test]
+fn save_openai_compatible_custom_models_persists_env_file() {
+    let _lock = crate::storage::lock_test_env();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let _guard = EnvGuard::save(&["JCODE_HOME", "JCODE_OPENAI_COMPAT_MODELS"]);
+    crate::env::set_var("JCODE_HOME", temp.path());
+    crate::env::remove_var("JCODE_OPENAI_COMPAT_MODELS");
+
+    let saved = save_openai_compatible_custom_models(&[
+        "custom-a".to_string(),
+        " custom-b ".to_string(),
+        "custom-a".to_string(),
+        String::new(),
+    ])
+    .expect("save models");
+
+    assert_eq!(saved, vec!["custom-a".to_string(), "custom-b".to_string()]);
+    assert_eq!(
+        std::env::var("JCODE_OPENAI_COMPAT_MODELS").ok().as_deref(),
+        Some("custom-a,custom-b")
+    );
+
+    crate::env::remove_var("JCODE_OPENAI_COMPAT_MODELS");
+    assert_eq!(
+        openai_compatible_custom_models(),
+        vec!["custom-a".to_string(), "custom-b".to_string()]
     );
 }

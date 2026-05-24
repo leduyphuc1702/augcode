@@ -1208,12 +1208,6 @@ pub async fn run_model_command(
 ) -> Result<()> {
     let provider = super::provider_init::init_provider_quiet(choice, model).await?;
 
-    if let Err(err) = provider.prefetch_models().await
-        && !super::output::quiet_enabled()
-    {
-        eprintln!("Warning: failed to refresh dynamic model list: {}", err);
-    }
-
     let routes = provider.model_routes();
     let filtered_routes = filter_cli_model_routes_for_choice(choice, &routes);
     let models = if filtered_routes.len() == routes.len() {

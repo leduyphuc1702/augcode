@@ -90,7 +90,12 @@ fn direct_openai_compatible_profile_routes(
     let resolved = crate::provider_catalog::resolve_openai_compatible_profile(profile);
     let static_models = crate::provider_catalog::openai_compatible_profile_static_models(profile);
     let (mut models, from_live_catalog) =
-        if let Some(models) = cached_live_models_for_openai_compatible_profile(&resolved) {
+        if let Some(mut models) = cached_live_models_for_openai_compatible_profile(&resolved) {
+            for model in &static_models {
+                if !models.iter().any(|existing| existing == model) {
+                    models.push(model.clone());
+                }
+            }
             (models, true)
         } else {
             let mut models = static_models;
@@ -235,9 +240,6 @@ impl MultiProvider {
         mode: CompletionMode<'_>,
         resume_session_id: Option<&str>,
     ) -> Result<EventStream> {
-        self.spawn_anthropic_catalog_refresh_if_needed();
-        self.spawn_openai_catalog_refresh_if_needed();
-
         let detected_active = self.active_provider();
         let active = if let Some(forced) = self.forced_provider {
             if detected_active != forced {
@@ -745,28 +747,28 @@ impl MultiProvider {
         }
 
         if let Some(anthropic) = self.anthropic_provider() {
-            Self::spawn_post_auth_model_refresh(anthropic, "Anthropic");
+            Self::invalidate_post_auth_provider_credentials(anthropic, "Anthropic");
         }
         if let Some(claude) = self.claude_provider() {
-            Self::spawn_post_auth_model_refresh(claude, "Claude");
+            Self::invalidate_post_auth_provider_credentials(claude, "Claude");
         }
         if let Some(openai) = self.openai_provider() {
-            Self::spawn_post_auth_model_refresh(openai, "OpenAI");
+            Self::invalidate_post_auth_provider_credentials(openai, "OpenAI");
         }
         if let Some(antigravity) = self.antigravity_provider() {
-            Self::spawn_post_auth_model_refresh(antigravity, "Antigravity");
+            Self::invalidate_post_auth_provider_credentials(antigravity, "Antigravity");
         }
         if let Some(gemini) = self.gemini_provider() {
-            Self::spawn_post_auth_model_refresh(gemini, "Gemini");
+            Self::invalidate_post_auth_provider_credentials(gemini, "Gemini");
         }
         if let Some(cursor) = self.cursor_provider() {
-            Self::spawn_post_auth_model_refresh(cursor, "Cursor");
+            Self::invalidate_post_auth_provider_credentials(cursor, "Cursor");
         }
         if let Some(openrouter) = self.openrouter_provider() {
-            Self::spawn_post_auth_model_refresh(openrouter, "OpenRouter");
+            Self::invalidate_post_auth_provider_credentials(openrouter, "OpenRouter");
         }
         if let Some(bedrock) = self.bedrock_provider() {
-            Self::spawn_post_auth_model_refresh(bedrock, "AWS Bedrock");
+            Self::invalidate_post_auth_provider_credentials(bedrock, "AWS Bedrock");
         }
         crate::logging::auth_event("auth_changed_completed", "multi-provider", &[]);
     }
@@ -943,9 +945,6 @@ impl Provider for MultiProvider {
     }
 
     fn set_model(&self, model: &str) -> Result<()> {
-        self.spawn_anthropic_catalog_refresh_if_needed();
-        self.spawn_openai_catalog_refresh_if_needed();
-
         let requested_model = model.trim();
         if requested_model.is_empty() {
             anyhow::bail!("Model cannot be empty");
@@ -1094,9 +1093,6 @@ impl Provider for MultiProvider {
 
     fn model_routes(&self) -> Vec<ModelRoute> {
         let routes_started = std::time::Instant::now();
-        self.spawn_anthropic_catalog_refresh_if_needed();
-        self.spawn_openai_catalog_refresh_if_needed();
-
         let mut routes = Vec::new();
         let mut openrouter_models = 0usize;
         let mut openrouter_endpoint_cache_hits = 0usize;
@@ -2018,8 +2014,6 @@ impl Provider for MultiProvider {
             forced_provider: self.forced_provider,
         };
 
-        provider.spawn_anthropic_catalog_refresh_if_needed();
-        provider.spawn_openai_catalog_refresh_if_needed();
         if matches!(active, ActiveProvider::Copilot) {
             let _ = provider.set_model(&format!("copilot:{}", current_model));
         } else if matches!(active, ActiveProvider::Antigravity) {

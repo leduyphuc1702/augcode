@@ -129,7 +129,7 @@ pub mod linux {
 }
 
 #[cfg(target_os = "macos")]
-mod macos {
+pub mod macos {
     use super::*;
     use std::mem;
 
@@ -153,8 +153,6 @@ mod macos {
 
     const PROC_PIDLISTFDS: i32 = 1;
     const PROC_PIDFDVNODEPATHINFO: i32 = 2;
-    const PROC_PIDFDSOCKETINFO: i32 = 3;
-    const PROC_PIDFDPIPEINFO: i32 = 6;
 
     const PROC_FDTYPE_VNODE: u32 = 1;
     const PROC_FDTYPE_SOCKET: u32 = 2;
@@ -199,7 +197,39 @@ mod macos {
             return StdinState::Reading;
         }
 
-        StdinState::NotReading
+        StdinState::Unknown
+    }
+
+    pub fn check_process_tree(pid: u32) -> StdinState {
+        let result = check(pid);
+        if result == StdinState::Reading {
+            return result;
+        }
+
+        for child_pid in child_pids(pid) {
+            if check(child_pid) == StdinState::Reading || stdin_is_interactive(child_pid as i32) {
+                return StdinState::Reading;
+            }
+        }
+
+        result
+    }
+
+    fn child_pids(pid: u32) -> Vec<u32> {
+        let Ok(output) = std::process::Command::new("pgrep")
+            .arg("-P")
+            .arg(pid.to_string())
+            .output()
+        else {
+            return Vec::new();
+        };
+        if !output.status.success() {
+            return Vec::new();
+        }
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| line.trim().parse::<u32>().ok())
+            .collect()
     }
 
     fn stdin_is_interactive(pid: i32) -> bool {
@@ -237,10 +267,12 @@ mod macos {
     }
 
     fn stdin_fd_is_interactive(pid: i32, fd_type: u32) -> bool {
+        if matches!(fd_type, PROC_FDTYPE_PIPE | PROC_FDTYPE_SOCKET) {
+            return true;
+        }
+
         let flavor = match fd_type {
             PROC_FDTYPE_VNODE => PROC_PIDFDVNODEPATHINFO,
-            PROC_FDTYPE_SOCKET => PROC_PIDFDSOCKETINFO,
-            PROC_FDTYPE_PIPE => PROC_PIDFDPIPEINFO,
             _ => return false,
         };
         let mut buf = vec![0u8; 4096];

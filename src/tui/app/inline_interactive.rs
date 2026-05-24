@@ -2,7 +2,7 @@ use super::*;
 use crate::tui::session_picker::{self, OverlayAction, PickerResult, ResumeTarget, SessionPicker};
 use crate::tui::{
     AccountPickerAction, InlineInteractiveState, PickerAction, PickerEntry, PickerKind,
-    PickerOption,
+    PickerOption, WorkflowPickerAction,
 };
 
 #[path = "inline_interactive/helpers.rs"]
@@ -1305,9 +1305,154 @@ impl App {
                     provider_id
                 ))),
             },
+            AccountPickerAction::SubmitInput { input, .. } => {
+                self.input = input;
+                self.cursor_pos = self.input.len();
+                self.submit_input();
+            }
+            AccountPickerAction::PromptValue {
+                prompt,
+                command_prefix,
+                empty_value,
+                status_notice,
+                ..
+            } => self.prompt_account_value(prompt, command_prefix, empty_value, status_notice),
             AccountPickerAction::OpenCenter { provider_filter } => {
                 self.open_account_center(provider_filter.as_deref())
             }
+        }
+    }
+
+    fn apply_workflow_command_from_picker(&mut self, command: &str) {
+        match crate::agent_workflow::workflow_command(command, &mut self.session) {
+            Some(message) => {
+                self.push_display_message(DisplayMessage::system(message));
+                self.set_status_notice("Workflow updated");
+                self.maybe_open_workflow_interaction_picker();
+            }
+            None => self.push_display_message(DisplayMessage::error(
+                "Unknown workflow command.".to_string(),
+            )),
+        }
+    }
+
+    fn prefill_workflow_input(&mut self, input: &str, notice: &str) {
+        self.inline_interactive_state = None;
+        self.input = input.to_string();
+        self.cursor_pos = self.input.len();
+        self.set_status_notice(notice);
+    }
+
+    pub(super) fn clear_pending_workflow_question(&mut self) {
+        let Some(state) = self.session.agent_workflow_state.as_mut() else {
+            return;
+        };
+        let is_question = state
+            .pending_user_interaction
+            .as_ref()
+            .map(|pending| pending.kind == crate::agent_workflow::WorkflowInteractionKind::Question)
+            .unwrap_or(false);
+        if is_question {
+            state.clear_pending_user_interaction();
+            let _ = self.session.save();
+        }
+    }
+
+    fn selected_workflow_question_labels(&self) -> Vec<String> {
+        self.inline_interactive_state
+            .as_ref()
+            .map(|picker| {
+                picker
+                    .entries
+                    .iter()
+                    .filter(|entry| entry.is_current)
+                    .filter_map(|entry| match &entry.action {
+                        PickerAction::Workflow(WorkflowPickerAction::SelectQuestionOption {
+                            label,
+                            ..
+                        }) => Some(label.clone()),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn submit_workflow_question_answer(&mut self) {
+        let labels = self.selected_workflow_question_labels();
+        if labels.is_empty() {
+            self.set_status_notice("Chọn ít nhất một phương án hoặc nhập ý khác");
+            return;
+        }
+        let answer = if labels.len() == 1 {
+            labels[0].clone()
+        } else {
+            labels
+                .iter()
+                .map(|label| format!("- {label}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        self.inline_interactive_state = None;
+        self.clear_pending_workflow_question();
+        self.input = answer;
+        self.cursor_pos = self.input.len();
+        self.submit_input();
+    }
+
+    fn prefill_custom_workflow_answer(&mut self) {
+        let labels = self.selected_workflow_question_labels();
+        let draft = if labels.is_empty() {
+            "Khác: ".to_string()
+        } else {
+            format!("{}\nKhác: ", labels.join("\n"))
+        };
+        self.prefill_workflow_input(&draft, "Nhập câu trả lời custom");
+    }
+
+    fn toggle_workflow_question_option(&mut self, option_id: &str, multiple: bool) {
+        let Some(picker) = self.inline_interactive_state.as_mut() else {
+            return;
+        };
+        for entry in &mut picker.entries {
+            let PickerAction::Workflow(WorkflowPickerAction::SelectQuestionOption {
+                option_id: entry_id,
+                ..
+            }) = &entry.action
+            else {
+                continue;
+            };
+            if entry_id == option_id {
+                entry.is_current = if multiple { !entry.is_current } else { true };
+            } else if !multiple {
+                entry.is_current = false;
+            }
+        }
+    }
+
+    fn handle_workflow_picker_selection(&mut self, action: WorkflowPickerAction) {
+        match action {
+            WorkflowPickerAction::ApprovePlan => {
+                self.inline_interactive_state = None;
+                self.apply_workflow_command_from_picker("/approve-plan");
+            }
+            WorkflowPickerAction::RejectPlan => {
+                self.prefill_workflow_input("/reject-plan ", "Nhập góp ý plan");
+            }
+            WorkflowPickerAction::ApproveReview => {
+                self.inline_interactive_state = None;
+                self.apply_workflow_command_from_picker("/approve-review");
+            }
+            WorkflowPickerAction::RejectReview => {
+                self.prefill_workflow_input("/reject-review ", "Nhập yêu cầu sửa");
+            }
+            WorkflowPickerAction::SelectQuestionOption {
+                option_id,
+                multiple,
+                ..
+            } => self.toggle_workflow_question_option(&option_id, multiple),
+            WorkflowPickerAction::SubmitQuestionAnswer => self.submit_workflow_question_answer(),
+            WorkflowPickerAction::CustomQuestionAnswer => self.prefill_custom_workflow_answer(),
         }
     }
 
@@ -1711,7 +1856,14 @@ impl App {
                 }
             }
             OverlayAction::Selected(PickerResult::SelectedInCurrentTerminal(ids)) => {
-                self.handle_session_picker_current_terminal_selection(&ids);
+                if self.session_picker_mode == SessionPickerMode::CatchUp {
+                    self.handle_session_picker_selection(&ids);
+                    if let Some(picker_cell) = self.session_picker_overlay.as_ref() {
+                        picker_cell.borrow_mut().clear_selected_sessions();
+                    }
+                } else {
+                    self.handle_session_picker_current_terminal_selection(&ids);
+                }
             }
             OverlayAction::Selected(PickerResult::RestoreCrashedGroup(session_ids)) => {
                 self.handle_batch_crash_restore(&session_ids);
@@ -1874,6 +2026,21 @@ impl App {
                     self.inline_interactive_state = None;
                 }
             }
+            KeyCode::Char(' ') => {
+                let action = self
+                    .inline_interactive_state
+                    .as_ref()
+                    .and_then(|picker| picker.selected_entry())
+                    .and_then(|entry| match &entry.action {
+                        PickerAction::Workflow(WorkflowPickerAction::SelectQuestionOption {
+                            ..
+                        }) => Some(entry.action.clone()),
+                        _ => None,
+                    });
+                if let Some(PickerAction::Workflow(action)) = action {
+                    self.handle_workflow_picker_selection(action);
+                }
+            }
             KeyCode::Enter => {
                 let Some(ref mut picker) = self.inline_interactive_state else {
                     return Ok(());
@@ -1974,6 +2141,9 @@ impl App {
                             }
                         }
                     }
+                    PickerAction::Workflow(action) => {
+                        self.handle_workflow_picker_selection(action);
+                    }
                     PickerAction::Model => {
                         if !route.available {
                             self.push_display_message(DisplayMessage::error(
@@ -2068,6 +2238,34 @@ impl App {
             _ => {}
         }
         Ok(())
+    }
+
+    pub(super) fn handle_inline_interactive_mouse_click(
+        &mut self,
+        mouse: MouseEvent,
+        area: ratatui::layout::Rect,
+    ) -> bool {
+        if self.inline_interactive_state.is_none()
+            || !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+            || !super::super::layout_utils::point_in_rect(mouse.column, mouse.row, area)
+        {
+            return false;
+        }
+
+        let row = mouse.row.saturating_sub(area.y);
+        if row < 2 {
+            return true;
+        }
+        let visible_idx = row.saturating_sub(2) as usize;
+        let Some(picker) = self.inline_interactive_state.as_mut() else {
+            return false;
+        };
+        if visible_idx >= picker.filtered.len() {
+            return true;
+        }
+        picker.selected = visible_idx;
+        let _ = self.handle_inline_interactive_key(KeyCode::Enter, KeyModifiers::empty());
+        true
     }
 
     pub(super) fn picker_fuzzy_score(pattern: &str, text: &str) -> Option<i32> {
@@ -2193,6 +2391,35 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::App;
+    use crate::provider::Provider;
+    use crate::tui::WorkflowPickerAction;
+    use crossterm::event::{KeyCode, KeyModifiers};
+    use std::sync::Arc;
+
+    struct MockProvider;
+
+    #[async_trait::async_trait]
+    impl Provider for MockProvider {
+        async fn complete(
+            &self,
+            _messages: &[crate::message::Message],
+            _tools: &[crate::message::ToolDefinition],
+            _system: &str,
+            _resume_session_id: Option<&str>,
+        ) -> anyhow::Result<crate::provider::EventStream> {
+            Err(anyhow::anyhow!(
+                "mock provider should not stream in picker tests"
+            ))
+        }
+
+        fn name(&self) -> &str {
+            "mock"
+        }
+
+        fn fork(&self) -> Arc<dyn Provider> {
+            Arc::new(Self)
+        }
+    }
 
     struct EnvGuard {
         vars: Vec<(&'static str, Option<std::ffi::OsString>)>,
@@ -2254,6 +2481,127 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn test_app() -> App {
+        let provider: Arc<dyn Provider> = Arc::new(MockProvider);
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let registry = rt.block_on(crate::tool::Registry::new(provider.clone()));
+        App::new_for_test_harness(provider, registry)
+    }
+
+    #[test]
+    fn workflow_picker_approval_runs_existing_command() {
+        let _guard = EnvGuard::new();
+        let mut app = test_app();
+        let mut state = crate::agent_workflow::AgentWorkflowState::default();
+        state.submit_final_plan("ship it");
+        let pending = state.pending_user_interaction.clone().unwrap();
+        app.session.agent_workflow_state = Some(state);
+        app.open_workflow_interaction_picker(pending);
+
+        app.handle_inline_interactive_key(KeyCode::Enter, KeyModifiers::empty())
+            .unwrap();
+
+        assert!(app.inline_interactive_state.is_none());
+        assert_eq!(
+            app.session.agent_workflow_state.as_ref().unwrap().status,
+            crate::agent_workflow::STATUS_IMPLEMENTATION_ALLOWED
+        );
+    }
+
+    #[test]
+    fn workflow_picker_feedback_prefills_reject_command() {
+        let _guard = EnvGuard::new();
+        let mut app = test_app();
+        app.open_workflow_interaction_picker(
+            crate::agent_workflow::PendingUserInteraction::plan_approval(),
+        );
+        app.inline_interactive_state.as_mut().unwrap().selected = 1;
+
+        app.handle_inline_interactive_key(KeyCode::Enter, KeyModifiers::empty())
+            .unwrap();
+
+        assert_eq!(app.input, "/reject-plan ");
+        assert_eq!(app.cursor_pos, app.input.len());
+    }
+
+    #[test]
+    fn workflow_picker_single_and_multi_question_selection() {
+        let _guard = EnvGuard::new();
+        let mut app = test_app();
+        let options = vec![
+            crate::agent_workflow::WorkflowInteractionOption {
+                id: "a".to_string(),
+                label: "A".to_string(),
+                description: None,
+            },
+            crate::agent_workflow::WorkflowInteractionOption {
+                id: "b".to_string(),
+                label: "B".to_string(),
+                description: None,
+            },
+        ];
+        app.open_workflow_interaction_picker(
+            crate::agent_workflow::PendingUserInteraction::question(
+                "Pick one",
+                crate::agent_workflow::WorkflowSelectionMode::Single,
+                options.clone(),
+                true,
+            ),
+        );
+        app.handle_inline_interactive_key(KeyCode::Char(' '), KeyModifiers::empty())
+            .unwrap();
+        app.inline_interactive_state.as_mut().unwrap().selected = 1;
+        app.handle_inline_interactive_key(KeyCode::Char(' '), KeyModifiers::empty())
+            .unwrap();
+        let picker = app.inline_interactive_state.as_ref().unwrap();
+        assert!(!picker.entries[0].is_current);
+        assert!(picker.entries[1].is_current);
+
+        app.open_workflow_interaction_picker(
+            crate::agent_workflow::PendingUserInteraction::question(
+                "Pick many",
+                crate::agent_workflow::WorkflowSelectionMode::Multiple,
+                options,
+                true,
+            ),
+        );
+        app.handle_inline_interactive_key(KeyCode::Char(' '), KeyModifiers::empty())
+            .unwrap();
+        app.inline_interactive_state.as_mut().unwrap().selected = 1;
+        app.handle_inline_interactive_key(KeyCode::Char(' '), KeyModifiers::empty())
+            .unwrap();
+        let picker = app.inline_interactive_state.as_ref().unwrap();
+        assert!(picker.entries[0].is_current);
+        assert!(picker.entries[1].is_current);
+    }
+
+    #[test]
+    fn workflow_picker_custom_answer_prefills_editable_text() {
+        let _guard = EnvGuard::new();
+        let mut app = test_app();
+        app.open_workflow_interaction_picker(
+            crate::agent_workflow::PendingUserInteraction::question(
+                "Pick",
+                crate::agent_workflow::WorkflowSelectionMode::Multiple,
+                vec![crate::agent_workflow::WorkflowInteractionOption {
+                    id: "a".to_string(),
+                    label: "A".to_string(),
+                    description: None,
+                }],
+                true,
+            ),
+        );
+        app.handle_workflow_picker_selection(WorkflowPickerAction::SelectQuestionOption {
+            option_id: "a".to_string(),
+            label: "A".to_string(),
+            multiple: true,
+        });
+        app.handle_workflow_picker_selection(WorkflowPickerAction::CustomQuestionAnswer);
+
+        assert!(app.inline_interactive_state.is_none());
+        assert_eq!(app.input, "A\nKhác: ");
     }
 
     #[test]

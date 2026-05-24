@@ -31,6 +31,7 @@ pub fn build_codebase_context_prompt(
                 active_file: None,
                 token_budget: Some(CODEBASE_CONTEXT_TOKEN_BUDGET),
                 unsaved_buffers: Vec::new(),
+                include_trace: false,
             },
         )
         .ok()?;

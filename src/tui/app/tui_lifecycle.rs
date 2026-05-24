@@ -4,6 +4,10 @@ use crate::tui::{backend, keybind};
 
 impl App {
     pub(super) fn apply_restored_reload_input(&mut self, restored: RestoredReloadInput) {
+        let has_startup_status_notice = restored.startup_status_notice.is_some();
+        let has_startup_display_message = restored.startup_display_message.is_some();
+        let mut should_dispatch_restored_remote =
+            restored.submit_on_restore || has_startup_status_notice || has_startup_display_message;
         self.input = restored.input;
         self.cursor_pos = restored.cursor;
         self.pending_images = restored.pending_images;
@@ -18,7 +22,7 @@ impl App {
         if let Some((title, message)) = restored.startup_display_message {
             self.push_display_message(DisplayMessage::system(message).with_title(title));
         }
-        self.interleave_message = None;
+        self.interleave_message = restored.interleave_message;
         self.rate_limit_pending_message = restored.rate_limit_pending_message;
         self.rate_limit_reset = restored.rate_limit_reset;
         self.observe_page_markdown = restored.observe_page_markdown;
@@ -29,14 +33,20 @@ impl App {
 
         let mut queued_messages = restored.queued_messages;
         let mut recovered_followups = Vec::new();
-        if let Some(interleave_message) = restored.interleave_message
-            && !interleave_message.trim().is_empty()
-        {
-            recovered_followups.push(interleave_message);
+        let has_acknowledged_interrupts = restored.pending_soft_interrupt_resend.as_ref().is_some_and(|resend| {
+            resend.is_empty() && !restored.pending_soft_interrupts.is_empty()
+        });
+        let recovered_interrupts = match restored.pending_soft_interrupt_resend {
+            Some(resend) => resend,
+            None => restored.pending_soft_interrupts,
+        };
+        if !has_acknowledged_interrupts {
+            if let Some(interleave_message) = self.interleave_message.take()
+                && !interleave_message.trim().is_empty()
+            {
+                recovered_followups.push(interleave_message);
+            }
         }
-        let recovered_interrupts = restored
-            .pending_soft_interrupt_resend
-            .unwrap_or(restored.pending_soft_interrupts);
         if !recovered_interrupts.is_empty() {
             crate::logging::info(&format!(
                 "Recovered {} pending soft interrupt(s) after reload; re-queueing them as normal follow-ups",
@@ -45,6 +55,7 @@ impl App {
             recovered_followups.extend(recovered_interrupts);
         }
         if !recovered_followups.is_empty() {
+            should_dispatch_restored_remote = true;
             let mut recovered_queue = recovered_followups;
             recovered_queue.append(&mut queued_messages);
             queued_messages = recovered_queue;
@@ -54,12 +65,17 @@ impl App {
         self.queued_messages = queued_messages;
         if self.has_queued_followups() {
             if self.is_remote {
-                // Do not synthesize a processing turn for restored remote follow-ups.
-                // After a reload, the server may still be running the previous turn;
-                // the queue must remain a wait-until-turn-end queue until the history
-                // bootstrap/Done event proves the remote turn is idle. The remote
-                // post-connect/history/tick paths will dispatch once it is safe.
-                self.set_status_notice("Restored queued follow-up after reload");
+                if should_dispatch_restored_remote {
+                    self.is_processing = true;
+                    self.status = ProcessingStatus::Sending;
+                    if self.processing_started.is_none() {
+                        self.processing_started = Some(Instant::now());
+                    }
+                    self.pending_queued_dispatch = true;
+                }
+                if !has_startup_status_notice {
+                    self.set_status_notice("Restored queued follow-up after reload");
+                }
             } else {
                 self.is_processing = true;
                 self.status = ProcessingStatus::Sending;
@@ -595,13 +611,6 @@ impl App {
             crate::session::SessionImproveMode::RefactorPlan => ImproveMode::RefactorPlan,
         });
         let t_session = t0.elapsed();
-
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            let provider_clone = Arc::clone(&provider);
-            handle.spawn(async move {
-                let _ = provider_clone.prefetch_models().await;
-            });
-        }
 
         // Pre-compute context info so it shows on startup
         let available_skills: Vec<crate::prompt::SkillInfo> = skills

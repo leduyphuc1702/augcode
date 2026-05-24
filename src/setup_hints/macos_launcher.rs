@@ -149,7 +149,14 @@ fn should_refresh_macos_app_launcher_paths(
 ) -> bool {
     !state.desktop_shortcut_created
         || !macos_app_launcher_is_valid(app_dir)
-        || legacy_app_dir.exists()
+        || (legacy_app_dir.exists() && !paths_equivalent(app_dir, legacy_app_dir))
+}
+
+fn paths_equivalent(left: &Path, right: &Path) -> bool {
+    match (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
 }
 
 fn macos_launcher_script(terminal: MacTerminalKind, exe_path: &str, app_dir: &Path) -> String {

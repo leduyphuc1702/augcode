@@ -1856,6 +1856,7 @@ fn handle_agent_workflow_command(app: &mut App, trimmed: &str) -> bool {
         Some(message) => {
             app.push_display_message(DisplayMessage::system(message));
             app.set_status_notice("Workflow updated");
+            app.maybe_open_workflow_interaction_picker();
         }
         None => app.push_display_message(DisplayMessage::error(
             "Unknown workflow command.".to_string(),

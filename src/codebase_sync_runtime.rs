@@ -15,6 +15,10 @@ pub fn start_for_session(session_id: String, working_dir: Option<String>) {
     if !crate::config::config().features.codebase_sync {
         return;
     }
+    #[cfg(test)]
+    if std::env::var_os("JCODE_TEST_CODEBASE_SYNC_RUNTIME").is_none() {
+        return;
+    }
     let Some(root) = working_dir.map(PathBuf::from).filter(|path| path.exists()) else {
         return;
     };

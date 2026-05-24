@@ -14,7 +14,7 @@ static ENV_LOCK: SharedEnvLock = SharedEnvLock;
 
 impl SharedEnvLock {
     fn lock(&self) -> std::sync::LockResult<std::sync::MutexGuard<'static, ()>> {
-        crate::storage::test_env_lock().lock()
+        Ok(crate::storage::lock_test_env())
     }
 }
 
@@ -836,7 +836,7 @@ fn openai_compatible_model_catalog_refresh_calls_models_endpoint_and_updates_dis
 }
 
 #[test]
-fn built_in_openai_compatible_static_models_drop_out_after_live_catalog() {
+fn built_in_openai_compatible_static_models_remain_after_live_catalog() {
     let _lock = ENV_LOCK.lock().unwrap();
     let temp = TempDir::new().expect("create temp home");
     let _home = EnvVarGuard::set("HOME", temp.path());
@@ -867,6 +867,7 @@ fn built_in_openai_compatible_static_models_drop_out_after_live_catalog() {
         static_models: vec![
             "zai-glm-4.7".to_string(),
             "qwen-3-235b-a22b-instruct-2507".to_string(),
+            "llama3.1-8b".to_string(),
         ],
         send_openrouter_headers: false,
         ..make_custom_compatible_provider()
@@ -885,6 +886,7 @@ fn built_in_openai_compatible_static_models_drop_out_after_live_catalog() {
             .iter()
             .any(|model| model == "qwen-3-235b-a22b-instruct-2507")
     );
+    assert!(display.iter().any(|model| model == "llama3.1-8b"));
     assert!(
         !display.iter().any(|model| model == "zai-glm-4.7"),
         "Cerebras models that 404 on chat/completions should not be advertised after a live catalog refresh: {display:?}"
@@ -1070,13 +1072,13 @@ fn test_rank_providers_filters_down_providers() {
 }
 
 #[test]
-fn test_background_refresh_waits_for_soft_ttl() {
+fn test_background_refresh_is_disabled() {
     let provider = make_provider();
 
     assert!(!provider.should_background_refresh_model_catalog(
         MODEL_CATALOG_SOFT_REFRESH_SECS.saturating_sub(1)
     ));
-    assert!(provider.should_background_refresh_model_catalog(MODEL_CATALOG_SOFT_REFRESH_SECS));
+    assert!(!provider.should_background_refresh_model_catalog(MODEL_CATALOG_SOFT_REFRESH_SECS));
 }
 
 #[test]

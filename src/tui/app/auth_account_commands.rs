@@ -266,6 +266,33 @@ fn parse_account_command(trimmed: &str) -> Option<Result<AccountCommand, String>
                 }
                 AccountCommand::SetOpenAiCompatDefaultModel(normalize_clearish_value(value))
             }
+            "model" if provider.id == "openai-compatible" => {
+                let Some((action, model)) = value.split_once(' ') else {
+                    return Some(Err(
+                        "Usage: `/account openai-compatible model <add|remove> <model>`"
+                            .to_string(),
+                    ));
+                };
+                let model = model.trim();
+                if model.is_empty() {
+                    return Some(Err(
+                        "Usage: `/account openai-compatible model <add|remove> <model>`"
+                            .to_string(),
+                    ));
+                }
+                match action {
+                    "add" => AccountCommand::AddOpenAiCompatModel(model.to_string()),
+                    "remove" | "rm" | "delete" => {
+                        AccountCommand::RemoveOpenAiCompatModel(model.to_string())
+                    }
+                    _ => {
+                        return Some(Err(
+                            "Usage: `/account openai-compatible model <add|remove> <model>`"
+                                .to_string(),
+                        ));
+                    }
+                }
+            }
             other => {
                 if matches!(provider.id, "claude" | "openai") {
                     return Some(Ok(AccountCommand::Switch {
@@ -357,6 +384,12 @@ fn execute_account_command_local(app: &mut App, command: AccountCommand) {
         }
         AccountCommand::SetOpenAiCompatDefaultModel(value) => {
             save_openai_compat_setting(app, OpenAiCompatSetting::DefaultModel, value.as_deref())
+        }
+        AccountCommand::AddOpenAiCompatModel(model) => {
+            save_openai_compat_model(app, OpenAiCompatModelAction::Add, &model)
+        }
+        AccountCommand::RemoveOpenAiCompatModel(model) => {
+            save_openai_compat_model(app, OpenAiCompatModelAction::Remove, &model)
         }
     }
 }
@@ -825,6 +858,89 @@ fn save_openai_compat_setting(app: &mut App, setting: OpenAiCompatSetting, value
     )));
 }
 
+#[derive(Clone, Copy)]
+enum OpenAiCompatModelAction {
+    Add,
+    Remove,
+}
+
+fn save_openai_compat_model(app: &mut App, action: OpenAiCompatModelAction, model: &str) {
+    let model = model.trim();
+    if model.is_empty() {
+        app.push_display_message(DisplayMessage::error(
+            "Model id cannot be empty.".to_string(),
+        ));
+        return;
+    }
+
+    let old_default = crate::provider_catalog::resolve_openai_compatible_profile(
+        crate::provider_catalog::OPENAI_COMPAT_PROFILE,
+    )
+    .default_model;
+    let mut models = crate::provider_catalog::openai_compatible_custom_models();
+    match action {
+        OpenAiCompatModelAction::Add => {
+            if !models.iter().any(|existing| existing == model) {
+                models.push(model.to_string());
+            }
+        }
+        OpenAiCompatModelAction::Remove => {
+            models.retain(|existing| existing != model);
+        }
+    }
+
+    let saved = match crate::provider_catalog::save_openai_compatible_custom_models(&models) {
+        Ok(models) => models,
+        Err(err) => {
+            app.push_display_message(DisplayMessage::error(format!(
+                "Failed to save OpenAI-compatible models: {}",
+                err
+            )));
+            return;
+        }
+    };
+
+    let next_default = match action {
+        OpenAiCompatModelAction::Add
+            if old_default.as_deref().map(str::is_empty).unwrap_or(true) =>
+        {
+            Some(model.to_string())
+        }
+        OpenAiCompatModelAction::Remove if old_default.as_deref() == Some(model) => {
+            saved.first().cloned()
+        }
+        _ => old_default,
+    };
+    if let Err(err) = crate::provider_catalog::save_env_value_to_env_file(
+        "JCODE_OPENAI_COMPAT_DEFAULT_MODEL",
+        crate::provider_catalog::OPENAI_COMPAT_PROFILE.env_file,
+        next_default.as_deref(),
+    ) {
+        app.push_display_message(DisplayMessage::error(format!(
+            "Failed to save OpenAI-compatible default model: {}",
+            err
+        )));
+        return;
+    }
+
+    crate::provider_catalog::force_apply_openai_compatible_profile_env(Some(
+        crate::provider_catalog::OPENAI_COMPAT_PROFILE,
+    ));
+    crate::auth::AuthStatus::invalidate_cache();
+    app.provider.on_auth_changed_preserve_current_provider();
+    app.invalidate_model_picker_cache();
+
+    let label = match action {
+        OpenAiCompatModelAction::Add => format!("added `{}`", model),
+        OpenAiCompatModelAction::Remove => format!("removed `{}`", model),
+    };
+    app.set_status_notice(format!("OpenAI-compatible model {}", label));
+    app.push_display_message(DisplayMessage::system(format!(
+        "Saved OpenAI-compatible model list: **{}**.",
+        label
+    )));
+}
+
 fn render_provider_settings_markdown(app: &App, provider_id: &str) -> String {
     let status = crate::auth::AuthStatus::check();
     let cfg = crate::config::Config::load();
@@ -923,10 +1039,21 @@ fn render_provider_settings_markdown(app: &App, provider_id: &str) -> String {
                 "- Default model hint: `{}`",
                 compat.default_model.as_deref().unwrap_or("(unset)")
             ));
+            let models = crate::provider_catalog::openai_compatible_custom_models();
+            lines.push(format!(
+                "- Configured models: `{}`",
+                if models.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    models.join(", ")
+                }
+            ));
             lines.push("- `/account openai-compatible api-base <url|clear>`".to_string());
             lines.push("- `/account openai-compatible api-key-name <ENV_VAR|clear>`".to_string());
             lines.push("- `/account openai-compatible env-file <file.env|clear>`".to_string());
             lines.push("- `/account openai-compatible default-model <model|clear>`".to_string());
+            lines.push("- `/account openai-compatible model add <model>`".to_string());
+            lines.push("- `/account openai-compatible model remove <model>`".to_string());
         }
         _ => {
             lines.push("No provider-specific settings are exposed here yet. Use `/login` to configure credentials.".to_string());

@@ -20,6 +20,7 @@ fn with_clean_provider_test_env<T>(f: impl FnOnce() -> T) -> T {
         "JCODE_OPENROUTER_MODEL_CATALOG",
         "JCODE_OPENROUTER_MODEL",
         "JCODE_OPENROUTER_STATIC_MODELS",
+        "JCODE_OPENAI_COMPAT_MODELS",
         "JCODE_OPENAI_COMPAT_API_BASE",
         "JCODE_OPENAI_COMPAT_API_KEY_NAME",
         "JCODE_OPENAI_COMPAT_ENV_FILE",
@@ -275,8 +276,8 @@ fn configured_openai_compatible_profile_routes_use_live_cache_when_not_active_pr
             "non-active configured direct profile should expose its live /models cache, routes: {opencode_routes:?}"
         );
         assert!(
-            !opencode_routes.iter().any(|route| route.model == "glm-4.7"),
-            "static fallback models should drop out once a live profile catalog is available, routes: {opencode_routes:?}"
+            opencode_routes.iter().any(|route| route.model == "glm-4.7"),
+            "static fallback models should remain alongside live profile catalog routes: {opencode_routes:?}"
         );
     });
 }

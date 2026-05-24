@@ -75,6 +75,12 @@ pub(super) fn picker_account_provider_scope(picker: &InlineInteractiveState) -> 
             | AccountPickerAction::Add { ref provider_id }
             | AccountPickerAction::Replace {
                 ref provider_id, ..
+            }
+            | AccountPickerAction::SubmitInput {
+                ref provider_id, ..
+            }
+            | AccountPickerAction::PromptValue {
+                ref provider_id, ..
             },
         ) => Some(provider_id.as_str()),
         PickerAction::Account(AccountPickerAction::OpenCenter {
@@ -87,6 +93,7 @@ pub(super) fn picker_account_provider_scope(picker: &InlineInteractiveState) -> 
         | PickerAction::Login(_)
         | PickerAction::Usage { .. }
         | PickerAction::AgentTarget(_)
-        | PickerAction::AgentModelChoice { .. } => None,
+        | PickerAction::AgentModelChoice { .. }
+        | PickerAction::Workflow(_) => None,
     })
 }

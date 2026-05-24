@@ -125,12 +125,16 @@ fn test_parse_tailscale_dns_name_invalid_json() {
 
 #[test]
 fn configured_auth_test_targets_only_include_configured_supported_providers() {
+    let _lock = crate::storage::lock_test_env();
+    let _env = SavedEnv::capture(&["OPENROUTER_API_KEY"]);
+    crate::env::set_var("OPENROUTER_API_KEY", "sk-or-v1-test");
     let status = AuthStatus {
         anthropic: ProviderAuth {
             state: AuthState::Available,
             has_oauth: true,
             has_api_key: false,
         },
+        openrouter: AuthState::Available,
         openai: AuthState::NotConfigured,
         gemini: AuthState::Available,
         google: AuthState::Expired,

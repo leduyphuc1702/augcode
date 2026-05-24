@@ -137,3 +137,26 @@ async fn e2e_deleted_file_not_returned() {
         .unwrap();
     assert!(!out2.output.contains("old.rs"));
 }
+
+#[tokio::test]
+async fn e2e_search_can_render_retrieval_trace() {
+    let dir = TempDir::new().unwrap();
+    let store = TempDir::new().unwrap();
+    write(
+        &dir.path().join("src/auth.rs"),
+        "pub fn validate_password() {}\n",
+    );
+    crate::env::set_var("JCODE_DIR", store.path());
+
+    let tool = CodebaseSearchTool::new();
+    let out = tool
+        .execute(
+            json!({"query": "validate_password", "include_trace": true}),
+            test_ctx(dir.path()),
+        )
+        .await
+        .unwrap();
+
+    assert!(out.output.contains("trace: candidates="));
+    assert!(out.output.contains("symbol_exact"));
+}

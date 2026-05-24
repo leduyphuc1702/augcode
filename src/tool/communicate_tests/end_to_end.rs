@@ -226,7 +226,8 @@ async fn communicate_spawn_reports_completion_back_to_spawner() {
         .execute(
             json!({
                 "action": "spawn",
-                "prompt": "Reply with exactly AUTH_TEST_OK and nothing else."
+                "prompt": "Reply with exactly AUTH_TEST_OK and nothing else.",
+                "spawn_mode": "headless"
             }),
             ctx,
         )

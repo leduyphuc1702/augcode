@@ -26,6 +26,101 @@ pub const STATUS_REJECTED: &str = "rejected";
 const ARTIFACT_MAX_CHARS: usize = 16_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowInteractionKind {
+    PlanApproval,
+    ReviewApproval,
+    Question,
+    SkillApproval,
+}
+
+impl Default for WorkflowInteractionKind {
+    fn default() -> Self {
+        Self::Question
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowSelectionMode {
+    Single,
+    Multiple,
+}
+
+impl Default for WorkflowSelectionMode {
+    fn default() -> Self {
+        Self::Single
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct WorkflowInteractionOption {
+    pub id: String,
+    pub label: String,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct PendingUserInteraction {
+    pub kind: WorkflowInteractionKind,
+    pub prompt: Option<String>,
+    pub selection_mode: WorkflowSelectionMode,
+    pub options: Vec<WorkflowInteractionOption>,
+    pub allow_custom: bool,
+}
+
+impl Default for PendingUserInteraction {
+    fn default() -> Self {
+        Self {
+            kind: WorkflowInteractionKind::Question,
+            prompt: None,
+            selection_mode: WorkflowSelectionMode::Single,
+            options: Vec::new(),
+            allow_custom: true,
+        }
+    }
+}
+
+impl PendingUserInteraction {
+    pub fn plan_approval() -> Self {
+        Self {
+            kind: WorkflowInteractionKind::PlanApproval,
+            prompt: Some("Duyệt plan trước khi triển khai.".to_string()),
+            selection_mode: WorkflowSelectionMode::Single,
+            options: Vec::new(),
+            allow_custom: true,
+        }
+    }
+
+    pub fn review_approval() -> Self {
+        Self {
+            kind: WorkflowInteractionKind::ReviewApproval,
+            prompt: Some("Duyệt kết quả review trước khi hoàn tất.".to_string()),
+            selection_mode: WorkflowSelectionMode::Single,
+            options: Vec::new(),
+            allow_custom: true,
+        }
+    }
+
+    pub fn question(
+        prompt: impl Into<String>,
+        selection_mode: WorkflowSelectionMode,
+        options: Vec<WorkflowInteractionOption>,
+        allow_custom: bool,
+    ) -> Self {
+        Self {
+            kind: WorkflowInteractionKind::Question,
+            prompt: Some(prompt.into()),
+            selection_mode,
+            options,
+            allow_custom,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct AgentWorkflowTaskState {
     pub id: String,
@@ -85,6 +180,7 @@ pub struct AgentWorkflowState {
     pub review: Option<String>,
     pub tasks: Vec<AgentWorkflowTaskState>,
     pub remote_skill_grants: Vec<RemoteSkillGrant>,
+    pub pending_user_interaction: Option<PendingUserInteraction>,
 }
 
 impl Default for AgentWorkflowState {
@@ -95,6 +191,7 @@ impl Default for AgentWorkflowState {
             review: None,
             tasks: Vec::new(),
             remote_skill_grants: Vec::new(),
+            pending_user_interaction: None,
         }
     }
 }
@@ -103,29 +200,55 @@ impl AgentWorkflowState {
     pub fn submit_final_plan(&mut self, plan: impl Into<String>) {
         self.final_plan = Some(plan.into());
         self.status = STATUS_AWAITING_PLAN_APPROVAL.to_string();
+        self.pending_user_interaction = Some(PendingUserInteraction::plan_approval());
     }
 
     pub fn submit_review(&mut self, review: impl Into<String>) {
         self.review = Some(review.into());
         self.status = STATUS_AWAITING_REVIEW_APPROVAL.to_string();
+        self.pending_user_interaction = Some(PendingUserInteraction::review_approval());
     }
 
     pub fn approve_plan(&mut self) {
         self.status = STATUS_IMPLEMENTATION_ALLOWED.to_string();
+        self.pending_user_interaction = None;
     }
 
     pub fn reject_plan(&mut self, reason: Option<&str>) {
         self.status = STATUS_REJECTED.to_string();
         self.review = reason.map(str::to_string);
+        self.pending_user_interaction = None;
     }
 
     pub fn approve_review(&mut self) {
         self.status = STATUS_COMPLETED.to_string();
+        self.pending_user_interaction = None;
     }
 
     pub fn reject_review(&mut self, reason: Option<&str>) {
         self.status = STATUS_IMPLEMENTATION_ALLOWED.to_string();
         self.review = reason.map(str::to_string);
+        self.pending_user_interaction = None;
+    }
+
+    pub fn request_user_input(
+        &mut self,
+        prompt: impl Into<String>,
+        selection_mode: WorkflowSelectionMode,
+        options: Vec<WorkflowInteractionOption>,
+        allow_custom: bool,
+    ) {
+        self.status = STATUS_CLARIFYING.to_string();
+        self.pending_user_interaction = Some(PendingUserInteraction::question(
+            prompt,
+            selection_mode,
+            options,
+            allow_custom,
+        ));
+    }
+
+    pub fn clear_pending_user_interaction(&mut self) {
+        self.pending_user_interaction = None;
     }
 
     pub fn grant_remote_skill(
@@ -566,6 +689,7 @@ pub fn workflow_command(input: &str, session: &mut Session) -> Option<String> {
         }
         let skill_ref = normalize_remote_skill_ref_for_grant(skill_ref);
         state.grant_remote_skill(skill_ref.clone(), None, None);
+        state.clear_pending_user_interaction();
         format!("Remote skill approved for this workflow: {skill_ref}")
     } else {
         return None;
@@ -603,6 +727,9 @@ pub fn render_status(session: &Session) -> String {
             "review: {}\n",
             crate::util::truncate_str(review, 500)
         ));
+    }
+    if let Some(pending) = state.pending_user_interaction.as_ref() {
+        output.push_str(&format!("pending_user_interaction: {:?}\n", pending.kind));
     }
     if !state.tasks.is_empty() {
         output.push_str("task_states:\n");
@@ -674,6 +801,64 @@ mod tests {
             session.agent_workflow_state.as_ref().unwrap().status,
             STATUS_COMPLETED
         );
+    }
+
+    #[test]
+    fn workflow_state_old_json_parses_without_pending_interaction() {
+        let state: AgentWorkflowState = serde_json::from_value(serde_json::json!({
+            "status": "idle",
+            "final_plan": "plan",
+            "tasks": [],
+            "remote_skill_grants": []
+        }))
+        .expect("old workflow json should parse");
+
+        assert_eq!(state.status, STATUS_IDLE);
+        assert_eq!(state.final_plan.as_deref(), Some("plan"));
+        assert!(state.pending_user_interaction.is_none());
+    }
+
+    #[test]
+    fn workflow_pending_interaction_roundtrips_and_clears() {
+        let mut state = AgentWorkflowState::default();
+        state.request_user_input(
+            "Chọn hướng triển khai",
+            WorkflowSelectionMode::Multiple,
+            vec![
+                WorkflowInteractionOption {
+                    id: "frontend".to_string(),
+                    label: "Frontend".to_string(),
+                    description: Some("UI".to_string()),
+                },
+                WorkflowInteractionOption {
+                    id: "backend".to_string(),
+                    label: "Backend".to_string(),
+                    description: None,
+                },
+            ],
+            true,
+        );
+
+        let json = serde_json::to_value(&state).expect("serialize workflow state");
+        let parsed: AgentWorkflowState =
+            serde_json::from_value(json).expect("deserialize workflow state");
+        let pending = parsed
+            .pending_user_interaction
+            .as_ref()
+            .expect("pending question");
+        assert_eq!(pending.kind, WorkflowInteractionKind::Question);
+        assert_eq!(pending.selection_mode, WorkflowSelectionMode::Multiple);
+        assert_eq!(pending.options.len(), 2);
+        assert!(pending.allow_custom);
+
+        let mut approved = parsed.clone();
+        approved.submit_final_plan("ship");
+        assert_eq!(
+            approved.pending_user_interaction.as_ref().unwrap().kind,
+            WorkflowInteractionKind::PlanApproval
+        );
+        approved.approve_plan();
+        assert!(approved.pending_user_interaction.is_none());
     }
 
     #[test]

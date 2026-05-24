@@ -1580,10 +1580,10 @@ impl App {
                             )
                         } else if let Some(resolved) = resolved_openai_compatible.as_ref() {
                             if resolved.requires_api_key {
-                                "Fetching models now. Jcode will switch to an accessible model returned by the live catalog and show the catalog diff when discovery finishes. If the model list looks stale, run `/refresh-model-list`.".to_string()
+                                "Model list uses configured models only. Add models from `/account openai-compatible` or run `/refresh-model-list` manually.".to_string()
                             } else {
                                 format!(
-                                    "Local endpoint configured at `{}`. Fetching models now; Jcode will switch to an accessible model returned by the live catalog and show the catalog diff when discovery finishes. If the model list looks stale, run `/refresh-model-list`.",
+                                    "Local endpoint configured at `{}`. Add models from `/account openai-compatible` or run `/refresh-model-list` manually.",
                                     endpoint.as_deref().unwrap_or(resolved.api_base.as_str()),
                                 )
                             }
@@ -1972,149 +1972,77 @@ impl App {
             crate::bus::UiActivity::catalog(
                 Some(self.session.id.clone()),
                 format!(
-                    "**{} Model Discovery Started**\n\nSaved credentials are active. Jcode is fetching the live model catalog, will only switch to a model returned by that catalog, and will show what changed when discovery finishes.",
+                    "**{} Ready**\n\nSaved credentials are active. The model list now uses configured models only. Use `/model` to pick a model or `/refresh-model-list` to fetch the live catalog manually.",
                     provider_label
                 ),
-                Some(format!("{}: fetching models...", provider_label)),
+                Some(format!("{}: ready", provider_label)),
             ),
         ));
-        self.set_status_notice(format!("{}: fetching models...", provider_label));
+        self.set_status_notice(format!("{}: ready", provider_label));
         self.invalidate_model_picker_cache();
 
         // Make the newly saved OpenAI-compatible credentials usable in this
-        // session immediately. The normal LoginCompleted path also calls this,
-        // but doing it here lets the refresh task see the hot-added provider
-        // without requiring a restart or a second user action.
+        // session immediately without fetching a live model catalog.
         let provider = Arc::clone(&self.provider);
         let session_id = self.session.id.clone();
-        let before_routes = provider.model_routes();
         self.provider.on_auth_changed();
+        let routes = provider.model_routes();
+        let expected_api_method = format!("openai-compatible:{}", provider_id);
+        let selected = routes
+            .iter()
+            .find(|route| {
+                route.available
+                    && route.api_method.eq_ignore_ascii_case(&expected_api_method)
+                    && crate::provider::is_listable_model_name(&route.model)
+            })
+            .or_else(|| {
+                routes.iter().find(|route| {
+                    route.available
+                        && route.api_method.eq_ignore_ascii_case(&provider_id)
+                        && crate::provider::is_listable_model_name(&route.model)
+                })
+            })
+            .map(|route| route.model.clone());
 
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            handle.spawn(async move {
-                let result = provider.refresh_model_catalog().await;
-                match result {
-                    Ok(_summary) => {
-                        let routes = provider.model_routes();
-                        let expected_api_method = format!("openai-compatible:{}", provider_id);
-                        let route_matches_profile = |route: &crate::provider::ModelRoute| {
-                            route.available
-                                && crate::provider::is_listable_model_name(&route.model)
-                                && (route.api_method.eq_ignore_ascii_case(&expected_api_method)
-                                    || route.api_method.eq_ignore_ascii_case(&provider_id))
-                        };
-                        let before_provider_routes = before_routes
-                            .into_iter()
-                            .filter(route_matches_profile)
-                            .collect::<Vec<_>>();
-                        let provider_routes = routes
-                            .iter()
-                            .filter(|route| route_matches_profile(route))
-                            .cloned()
-                            .collect::<Vec<_>>();
-                        let before_provider_models = before_provider_routes
-                            .iter()
-                            .map(|route| route.model.clone())
-                            .collect::<Vec<_>>();
-                        let after_provider_models = provider_routes
-                            .iter()
-                            .map(|route| route.model.clone())
-                            .collect::<Vec<_>>();
-                        let summary = crate::provider::summarize_model_catalog_refresh(
-                            before_provider_models,
-                            after_provider_models,
-                            before_provider_routes,
-                            provider_routes.clone(),
-                        );
-                        let selected = provider_routes
-                            .iter()
-                            .find(|route| {
-                                route.available
-                                    && route.api_method.eq_ignore_ascii_case(&expected_api_method)
-                                    && crate::provider::is_listable_model_name(&route.model)
-                            })
-                            .or_else(|| {
-                                provider_routes.iter().find(|route| {
-                                    route.available
-                                        && route.api_method.eq_ignore_ascii_case(&provider_id)
-                                        && crate::provider::is_listable_model_name(&route.model)
-                                })
-                            })
-                            .map(|route| route.model.clone());
-
-                        if let Some(model) = selected {
-                            match provider.set_model(&model) {
-                                Ok(()) => {
-                                    crate::bus::Bus::global().publish_models_updated();
-                                    crate::bus::Bus::global().publish(
-                                        crate::bus::BusEvent::ProviderModelActivated {
-                                            session_id,
-                                            model: model.clone(),
-                                            message: format!(
-                                                "**{} is ready.**\n\nFetched model catalog: +{} models, +{} routes, ~{} changed.{}\n\nSwitched to `{}`. Use `/model` if you want to choose a different accessible model.\n\nIf the model list ever looks stale, run `/refresh-model-list`.",
-                                                provider_label,
-                                                summary.models_added,
-                                                summary.routes_added,
-                                                summary.routes_changed,
-                                                {
-                                                    let mut details = String::new();
-                                                    super::model_context::append_model_name_diff(&mut details, &summary);
-                                                    if details.is_empty() { String::new() } else { format!("\n{}", details) }
-                                                },
-                                                model
-                                            ),
-                                            open_picker: false,
-                                        },
-                                    );
-                                }
-                                Err(error) => {
-                                    crate::bus::Bus::global().publish(
-                                        crate::bus::BusEvent::LoginCompleted(
-                                            crate::bus::LoginCompleted {
-                                                provider: provider_label,
-                                                success: false,
-                                                message: format!(
-                                                    "Fetched models, but failed to switch to `{}`: {}\n\nYou can run `/refresh-model-list` to retry model discovery.",
-                                                    model, error
-                                                ),
-                                            },
-                                        ),
-                                    );
-                                }
-                            }
-                        } else {
-                            crate::bus::Bus::global().publish(crate::bus::BusEvent::UiActivity(
-                                crate::bus::UiActivity::catalog(
-                                    Some(session_id),
-                                    format!(
-                                        "**{} Model Discovery Still Updating**\n\nSaved credentials are active, but this local refresh pass did not find a selectable {} route yet. Jcode is still processing the auth-change catalog refresh and will switch once provider routes are available. If the model list still looks stale after the auth catalog update, run `/refresh-model-list`.",
-                                        provider_label, provider_label
-                                    ),
-                                    Some(format!(
-                                        "{}: waiting for model routes...",
-                                        provider_label
-                                    )),
-                                ),
-                            ));
-                        }
-                    }
-                    Err(error) => {
-                        crate::bus::Bus::global().publish(crate::bus::BusEvent::UiActivity(
-                            crate::bus::UiActivity::catalog(
-                                Some(session_id),
-                                format!(
-                                    "**{} Model Discovery Still Updating**\n\nSaved credentials are active, but this local refresh pass failed before the server auth-change catalog refresh finished. Jcode is still processing the auth-change catalog refresh and will switch once provider routes are available. If the model list still looks stale after the auth catalog update, run `/refresh-model-list`.\n\nLocal refresh error: {}",
-                                    provider_label, error
-                                ),
-                                Some(format!(
-                                    "{}: waiting for model routes...",
-                                    provider_label
-                                )),
+        if let Some(model) = selected {
+            match provider.set_model(&model) {
+                Ok(()) => {
+                    crate::bus::Bus::global().publish_models_updated();
+                    crate::bus::Bus::global().publish(
+                        crate::bus::BusEvent::ProviderModelActivated {
+                            session_id,
+                            model: model.clone(),
+                            message: format!(
+                                "**{} is ready.**\n\nSwitched to configured model `{}`. Use `/model` to choose another configured model or `/refresh-model-list` to fetch the live catalog manually.",
+                                provider_label, model
                             ),
-                        ));
-                    }
+                            open_picker: false,
+                        },
+                    );
                 }
-            });
+                Err(error) => {
+                    crate::bus::Bus::global().publish(crate::bus::BusEvent::LoginCompleted(
+                        crate::bus::LoginCompleted {
+                            provider: provider_label,
+                            success: false,
+                            message: format!(
+                                "Saved credentials, but failed to switch to `{}`: {}",
+                                model, error
+                            ),
+                        },
+                    ));
+                }
+            }
+        } else {
+            crate::bus::Bus::global().publish(crate::bus::BusEvent::LoginCompleted(
+                crate::bus::LoginCompleted {
+                    provider: provider_label,
+                    success: true,
+                    message:
+                        "Saved credentials. Add a model from `/account openai-compatible`, then use `/model`."
+                            .to_string(),
+                },
+            ));
         }
     }
 

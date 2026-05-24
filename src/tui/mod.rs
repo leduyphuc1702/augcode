@@ -526,6 +526,7 @@ pub enum PickerKind {
     Account,
     Login,
     Usage,
+    Workflow,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -626,6 +627,17 @@ impl PickerKind {
                 shows_default_shortcut_hint: false,
                 preview_activation_column: 2,
             },
+            Self::Workflow => InlineInteractiveSchema {
+                layout: InlineInteractiveLayout::Compact,
+                primary_label: "WORKFLOW",
+                secondary_label: "ACTION",
+                secondary_preview_label: "ACTION",
+                tertiary_label: "",
+                preview_submit_hint: "  ↵ select",
+                active_submit_hint: "  ↑↓/jk Space ↵ Esc",
+                shows_default_shortcut_hint: false,
+                preview_activation_column: 0,
+            },
         }
     }
 
@@ -680,16 +692,50 @@ impl PickerKind {
                 let detail = route.map(|option| option.detail.as_str()).unwrap_or("");
                 format!("{} {} {} {}", entry.name, provider, method, detail)
             }
+            Self::Workflow => {
+                let action = entry
+                    .active_option()
+                    .map(|option| option.api_method.as_str())
+                    .unwrap_or("");
+                let detail = entry
+                    .active_option()
+                    .map(|option| option.detail.as_str())
+                    .unwrap_or("");
+                format!("{} {} {}", entry.name, action, detail)
+            }
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccountPickerAction {
-    Switch { provider_id: String, label: String },
-    Add { provider_id: String },
-    Replace { provider_id: String, label: String },
-    OpenCenter { provider_filter: Option<String> },
+    Switch {
+        provider_id: String,
+        label: String,
+    },
+    Add {
+        provider_id: String,
+    },
+    Replace {
+        provider_id: String,
+        label: String,
+    },
+    SubmitInput {
+        provider_id: String,
+        input: String,
+        state_label: String,
+    },
+    PromptValue {
+        provider_id: String,
+        prompt: String,
+        command_prefix: String,
+        empty_value: Option<String>,
+        status_notice: String,
+        state_label: String,
+    },
+    OpenCenter {
+        provider_filter: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -699,6 +745,21 @@ pub enum AgentModelTarget {
     Judge,
     Memory,
     Ambient,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkflowPickerAction {
+    ApprovePlan,
+    RejectPlan,
+    ApproveReview,
+    RejectReview,
+    SelectQuestionOption {
+        option_id: String,
+        label: String,
+        multiple: bool,
+    },
+    SubmitQuestionAnswer,
+    CustomQuestionAnswer,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -718,6 +779,7 @@ pub enum PickerAction {
         target: AgentModelTarget,
         clear_override: bool,
     },
+    Workflow(WorkflowPickerAction),
 }
 
 /// Unified inline picker with three columns.
@@ -767,6 +829,29 @@ fn estimate_picker_action_bytes(action: &PickerAction) -> usize {
         PickerAction::Account(AccountPickerAction::Replace { provider_id, label }) => {
             provider_id.capacity() + label.capacity()
         }
+        PickerAction::Account(AccountPickerAction::SubmitInput {
+            provider_id,
+            input,
+            state_label,
+        }) => provider_id.capacity() + input.capacity() + state_label.capacity(),
+        PickerAction::Account(AccountPickerAction::PromptValue {
+            provider_id,
+            prompt,
+            command_prefix,
+            empty_value,
+            status_notice,
+            state_label,
+        }) => {
+            provider_id.capacity()
+                + prompt.capacity()
+                + command_prefix.capacity()
+                + empty_value
+                    .as_ref()
+                    .map(|value| value.capacity())
+                    .unwrap_or(0)
+                + status_notice.capacity()
+                + state_label.capacity()
+        }
         PickerAction::Account(AccountPickerAction::OpenCenter { provider_filter }) => {
             provider_filter
                 .as_ref()
@@ -798,6 +883,17 @@ fn estimate_picker_action_bytes(action: &PickerAction) -> usize {
                     .map(|value| value.capacity())
                     .sum::<usize>()
         }
+        PickerAction::Workflow(action) => match action {
+            WorkflowPickerAction::ApprovePlan
+            | WorkflowPickerAction::RejectPlan
+            | WorkflowPickerAction::ApproveReview
+            | WorkflowPickerAction::RejectReview
+            | WorkflowPickerAction::SubmitQuestionAnswer
+            | WorkflowPickerAction::CustomQuestionAnswer => 0,
+            WorkflowPickerAction::SelectQuestionOption {
+                option_id, label, ..
+            } => option_id.capacity() + label.capacity(),
+        },
     }
 }
 
@@ -989,14 +1085,33 @@ impl PickerEntry {
         self.options.len()
     }
 
-    pub fn account_state_label(&self) -> Option<&'static str> {
+    pub fn account_state_label(&self) -> Option<&str> {
         match &self.action {
             PickerAction::Account(AccountPickerAction::Switch { .. }) => {
                 Some(if self.is_current { "active" } else { "saved" })
             }
             PickerAction::Account(AccountPickerAction::Add { .. }) => Some("add"),
             PickerAction::Account(AccountPickerAction::Replace { .. }) => Some("replace"),
+            PickerAction::Account(AccountPickerAction::SubmitInput { state_label, .. }) => {
+                Some(state_label.as_str())
+            }
+            PickerAction::Account(AccountPickerAction::PromptValue { state_label, .. }) => {
+                Some(state_label.as_str())
+            }
             PickerAction::Account(AccountPickerAction::OpenCenter { .. }) => Some("manage"),
+            PickerAction::Workflow(WorkflowPickerAction::ApprovePlan)
+            | PickerAction::Workflow(WorkflowPickerAction::ApproveReview) => Some("approve"),
+            PickerAction::Workflow(WorkflowPickerAction::RejectPlan)
+            | PickerAction::Workflow(WorkflowPickerAction::RejectReview) => Some("feedback"),
+            PickerAction::Workflow(WorkflowPickerAction::SelectQuestionOption { .. }) => {
+                Some(if self.is_current {
+                    "selected"
+                } else {
+                    "option"
+                })
+            }
+            PickerAction::Workflow(WorkflowPickerAction::SubmitQuestionAnswer) => Some("send"),
+            PickerAction::Workflow(WorkflowPickerAction::CustomQuestionAnswer) => Some("custom"),
             _ => None,
         }
     }

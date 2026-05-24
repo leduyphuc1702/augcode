@@ -24,6 +24,21 @@ use std::time::{Duration, Instant};
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 #[cfg(unix)]
+fn lock_env() -> std::sync::MutexGuard<'static, ()> {
+    ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[cfg(unix)]
+fn canonical_string(path: &Path) -> String {
+    std::fs::canonicalize(path)
+        .unwrap_or_else(|_| path.to_path_buf())
+        .to_string_lossy()
+        .to_string()
+}
+
+#[cfg(unix)]
 struct EnvVarGuard {
     key: &'static str,
     prev: Option<OsString>,
@@ -88,7 +103,7 @@ fn wait_for_lines(path: &Path, min_lines: usize) -> Vec<String> {
 #[cfg(unix)]
 #[test]
 fn spawn_resume_in_new_terminal_uses_handterm_exec_mode() {
-    let _env_lock = ENV_LOCK.lock().expect("env lock");
+    let _env_lock = lock_env();
     let temp = tempfile::tempdir().expect("temp dir");
     let output_path = temp.path().join("resume-launch.txt");
     write_fake_handterm(&temp, &output_path);
@@ -109,7 +124,7 @@ fn spawn_resume_in_new_terminal_uses_handterm_exec_mode() {
     assert!(launched);
 
     let lines = wait_for_lines(&output_path, 5);
-    assert_eq!(lines[0], cwd.to_string_lossy());
+    assert_eq!(lines[0], canonical_string(&cwd));
     assert_eq!(lines[1], "--backend");
     assert_eq!(lines[2], "gpu");
     assert_eq!(lines[3], "--exec");
@@ -157,7 +172,7 @@ fn resumed_window_title_includes_server_name_when_registry_matches_socket() {
 #[cfg(unix)]
 #[test]
 fn spawn_selfdev_in_new_terminal_uses_handterm_exec_mode() {
-    let _env_lock = ENV_LOCK.lock().expect("env lock");
+    let _env_lock = lock_env();
     let temp = tempfile::tempdir().expect("temp dir");
     let output_path = temp.path().join("selfdev-launch.txt");
     write_fake_handterm(&temp, &output_path);
@@ -178,7 +193,7 @@ fn spawn_selfdev_in_new_terminal_uses_handterm_exec_mode() {
     assert!(launched);
 
     let lines = wait_for_lines(&output_path, 5);
-    assert_eq!(lines[0], cwd.to_string_lossy());
+    assert_eq!(lines[0], canonical_string(&cwd));
     assert_eq!(lines[1], "--backend");
     assert_eq!(lines[2], "gpu");
     assert_eq!(lines[3], "--exec");

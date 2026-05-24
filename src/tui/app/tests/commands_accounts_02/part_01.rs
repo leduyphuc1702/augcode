@@ -584,6 +584,169 @@ fn test_account_openai_compatible_settings_renders_provider_settings() {
 }
 
 #[test]
+fn test_account_openai_compatible_picker_shows_model_add_remove_actions() {
+    with_temp_jcode_home(|| {
+        let prev_models = std::env::var_os("JCODE_OPENAI_COMPAT_MODELS");
+        crate::env::set_var("JCODE_OPENAI_COMPAT_MODELS", "custom-a,custom-b");
+
+        let mut app = create_test_app();
+        app.input = "/account openai-compatible".to_string();
+        app.submit_input();
+
+        let picker = app
+            .inline_interactive_state
+            .as_ref()
+            .expect("/account openai-compatible should open picker");
+        assert_eq!(picker.kind, crate::tui::PickerKind::Account);
+        assert!(picker.entries.iter().any(|entry| entry.name == "Add model"));
+        assert!(
+            picker
+                .entries
+                .iter()
+                .any(|entry| entry.name == "Remove model `custom-a`")
+        );
+
+        if let Some(value) = prev_models {
+            crate::env::set_var("JCODE_OPENAI_COMPAT_MODELS", value);
+        } else {
+            crate::env::remove_var("JCODE_OPENAI_COMPAT_MODELS");
+        }
+    });
+}
+
+#[test]
+fn test_account_openai_compatible_model_add_remove_updates_env_file_and_cache() {
+    with_temp_jcode_home(|| {
+        let prev_models = std::env::var_os("JCODE_OPENAI_COMPAT_MODELS");
+        let prev_default = std::env::var_os("JCODE_OPENAI_COMPAT_DEFAULT_MODEL");
+        crate::env::remove_var("JCODE_OPENAI_COMPAT_MODELS");
+        crate::env::remove_var("JCODE_OPENAI_COMPAT_DEFAULT_MODEL");
+
+        let mut app = create_test_app();
+        let before_revision = app.model_picker_catalog_revision;
+        app.input = "/account openai-compatible model add custom-a".to_string();
+        app.submit_input();
+
+        assert_eq!(
+            std::env::var("JCODE_OPENAI_COMPAT_MODELS").ok().as_deref(),
+            Some("custom-a")
+        );
+        assert_eq!(
+            crate::provider_catalog::resolve_openai_compatible_profile(
+                crate::provider_catalog::OPENAI_COMPAT_PROFILE
+            )
+            .default_model
+            .as_deref(),
+            Some("custom-a")
+        );
+        assert!(app.model_picker_catalog_revision > before_revision);
+
+        app.input = "/account openai-compatible model add custom-b".to_string();
+        app.submit_input();
+        app.input = "/account openai-compatible model remove custom-a".to_string();
+        app.submit_input();
+
+        assert_eq!(
+            std::env::var("JCODE_OPENAI_COMPAT_MODELS").ok().as_deref(),
+            Some("custom-b")
+        );
+        assert_eq!(
+            crate::provider_catalog::resolve_openai_compatible_profile(
+                crate::provider_catalog::OPENAI_COMPAT_PROFILE
+            )
+            .default_model
+            .as_deref(),
+            Some("custom-b")
+        );
+        assert_eq!(
+            crate::provider_catalog::openai_compatible_custom_models(),
+            vec!["custom-b".to_string()]
+        );
+
+        if let Some(value) = prev_models {
+            crate::env::set_var("JCODE_OPENAI_COMPAT_MODELS", value);
+        } else {
+            crate::env::remove_var("JCODE_OPENAI_COMPAT_MODELS");
+        }
+        if let Some(value) = prev_default {
+            crate::env::set_var("JCODE_OPENAI_COMPAT_DEFAULT_MODEL", value);
+        } else {
+            crate::env::remove_var("JCODE_OPENAI_COMPAT_DEFAULT_MODEL");
+        }
+    });
+}
+
+#[test]
+fn test_account_openai_compatible_inline_picker_add_remove_updates_models() {
+    with_temp_jcode_home(|| {
+        let prev_models = std::env::var_os("JCODE_OPENAI_COMPAT_MODELS");
+        let prev_default = std::env::var_os("JCODE_OPENAI_COMPAT_DEFAULT_MODEL");
+        crate::env::remove_var("JCODE_OPENAI_COMPAT_MODELS");
+        crate::env::remove_var("JCODE_OPENAI_COMPAT_DEFAULT_MODEL");
+
+        let mut app = create_test_app();
+        app.input = "/account openai-compatible".to_string();
+        app.submit_input();
+
+        let add_pos = {
+            let picker = app
+                .inline_interactive_state
+                .as_ref()
+                .expect("openai-compatible picker should open");
+            picker
+                .filtered
+                .iter()
+                .position(|&idx| picker.entries[idx].name == "Add model")
+                .expect("add model row")
+        };
+        app.inline_interactive_state.as_mut().unwrap().selected = add_pos;
+        app.handle_key(KeyCode::Enter, KeyModifiers::empty())
+            .expect("select add model row");
+        assert!(matches!(
+            app.pending_account_input,
+            Some(super::auth::PendingAccountInput::CommandValue { ref command_prefix, .. })
+                if command_prefix == "/account openai-compatible model add"
+        ));
+
+        app.input = "custom-inline".to_string();
+        app.submit_input();
+        assert_eq!(
+            crate::provider_catalog::openai_compatible_custom_models(),
+            vec!["custom-inline".to_string()]
+        );
+
+        app.input = "/account openai-compatible".to_string();
+        app.submit_input();
+        let remove_pos = {
+            let picker = app
+                .inline_interactive_state
+                .as_ref()
+                .expect("openai-compatible picker should reopen");
+            picker
+                .filtered
+                .iter()
+                .position(|&idx| picker.entries[idx].name == "Remove model `custom-inline`")
+                .expect("remove model row")
+        };
+        app.inline_interactive_state.as_mut().unwrap().selected = remove_pos;
+        app.handle_key(KeyCode::Enter, KeyModifiers::empty())
+            .expect("select remove model row");
+        assert!(crate::provider_catalog::openai_compatible_custom_models().is_empty());
+
+        if let Some(value) = prev_models {
+            crate::env::set_var("JCODE_OPENAI_COMPAT_MODELS", value);
+        } else {
+            crate::env::remove_var("JCODE_OPENAI_COMPAT_MODELS");
+        }
+        if let Some(value) = prev_default {
+            crate::env::set_var("JCODE_OPENAI_COMPAT_DEFAULT_MODEL", value);
+        } else {
+            crate::env::remove_var("JCODE_OPENAI_COMPAT_DEFAULT_MODEL");
+        }
+    });
+}
+
+#[test]
 fn test_account_default_provider_command_saves_config() {
     let _guard = crate::storage::lock_test_env();
     let mut app = create_test_app();

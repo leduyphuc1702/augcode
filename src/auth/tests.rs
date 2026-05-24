@@ -128,6 +128,7 @@ fn full_and_fast_auth_status_match_for_shared_probe_fields() {
         "JCODE_OPENROUTER_MODEL_CATALOG",
         "JCODE_OPENROUTER_STATIC_MODELS",
         "JCODE_OPENROUTER_MODEL",
+        "JCODE_OPENAI_COMPAT_MODELS",
         "JCODE_OPENROUTER_DYNAMIC_BEARER_PROVIDER",
         crate::auth::azure::ENDPOINT_ENV,
         crate::auth::azure::API_KEY_ENV,
@@ -166,6 +167,7 @@ fn full_and_fast_auth_status_match_for_shared_probe_fields() {
         "JCODE_OPENROUTER_MODEL_CATALOG",
         "JCODE_OPENROUTER_STATIC_MODELS",
         "JCODE_OPENROUTER_MODEL",
+        "JCODE_OPENAI_COMPAT_MODELS",
         "JCODE_OPENROUTER_DYNAMIC_BEARER_PROVIDER",
     ] {
         crate::env::remove_var(key);

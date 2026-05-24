@@ -6,7 +6,10 @@ mod bash;
 mod batch;
 mod bg;
 mod browser;
+mod codebase_changes;
 mod codebase_eval;
+mod codebase_impact;
+mod codebase_route_map;
 mod codebase_search;
 mod codesearch;
 mod commit_lineage_search;
@@ -163,6 +166,24 @@ impl Registry {
                 &mut timings,
                 "codebase_eval",
                 codebase_eval::CodebaseEvalTool::new,
+            );
+            Self::insert_tool_timed(
+                &mut m,
+                &mut timings,
+                "codebase_impact",
+                codebase_impact::CodebaseImpactTool::new,
+            );
+            Self::insert_tool_timed(
+                &mut m,
+                &mut timings,
+                "codebase_changes",
+                codebase_changes::CodebaseChangesTool::new,
+            );
+            Self::insert_tool_timed(
+                &mut m,
+                &mut timings,
+                "codebase_route_map",
+                codebase_route_map::CodebaseRouteMapTool::new,
             );
             Self::insert_tool_timed(
                 &mut m,
@@ -407,11 +428,22 @@ impl Registry {
         // Drop the lock before executing
         drop(tools);
 
+        let usage_ctx = ctx.clone();
         let started_at = std::time::Instant::now();
         let result = tool.execute(input.clone(), ctx).await;
         let latency_ms = started_at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
 
         crate::telemetry::record_tool_execution(resolved_name, &input, result.is_ok(), latency_ms);
+        if let Some(root) = usage_ctx.working_dir.as_deref() {
+            let trace = jcode_codebase_retrieval::retrieval_usage_trace_for_tool(
+                usage_ctx.session_id,
+                usage_ctx.message_id,
+                usage_ctx.tool_call_id,
+                resolved_name,
+                &input,
+            );
+            let _ = jcode_codebase_retrieval::record_retrieval_usage_trace(root, &trace);
+        }
 
         let mut output = result?;
 
