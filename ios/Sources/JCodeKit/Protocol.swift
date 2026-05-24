@@ -140,6 +140,8 @@ public enum ServerEvent: Decodable, Sendable {
     case modelChanged(id: UInt64, model: String, providerName: String?, error: String?)
     case notification(Notification)
     case swarmStatus(members: [SwarmMemberStatus])
+    case workflowQuestion(questionId: String, fromSession: String, fromName: String?, question: String, options: [QuestionOption], allowFreeform: Bool)
+    case workflowQuestionAnswered(questionId: String, fromSession: String, fromName: String?, answer: WorkflowQuestionAnswer)
     case mcpStatus(servers: [String])
     case softInterruptInjected(content: String, point: String, toolsSkipped: Int?)
     case interrupted
@@ -262,6 +264,22 @@ public enum ServerEvent: Decodable, Sendable {
             let members = try container.decode([SwarmMemberStatus].self, forKey: .key("members"))
             self = .swarmStatus(members: members)
 
+        case "workflow_question":
+            let questionId = try container.decode(String.self, forKey: .key("question_id"))
+            let fromSession = try container.decode(String.self, forKey: .key("from_session"))
+            let fromName = try container.decodeIfPresent(String.self, forKey: .key("from_name"))
+            let question = try container.decode(String.self, forKey: .key("question"))
+            let options = try container.decodeIfPresent([QuestionOption].self, forKey: .key("options")) ?? []
+            let allowFreeform = try container.decodeIfPresent(Bool.self, forKey: .key("allow_freeform")) ?? false
+            self = .workflowQuestion(questionId: questionId, fromSession: fromSession, fromName: fromName, question: question, options: options, allowFreeform: allowFreeform)
+
+        case "workflow_question_answered":
+            let questionId = try container.decode(String.self, forKey: .key("question_id"))
+            let fromSession = try container.decode(String.self, forKey: .key("from_session"))
+            let fromName = try container.decodeIfPresent(String.self, forKey: .key("from_name"))
+            let answer = try container.decode(WorkflowQuestionAnswer.self, forKey: .key("answer"))
+            self = .workflowQuestionAnswered(questionId: questionId, fromSession: fromSession, fromName: fromName, answer: answer)
+
         case "mcp_status":
             let servers = try container.decode([String].self, forKey: .key("servers"))
             self = .mcpStatus(servers: servers)
@@ -309,6 +327,24 @@ public enum ServerEvent: Decodable, Sendable {
 }
 
 // MARK: - Supporting Types
+
+public struct QuestionOption: Codable, Sendable {
+    public let id: String
+    public let label: String
+    public let description: String?
+}
+
+public struct WorkflowQuestionAnswer: Codable, Sendable {
+    public let questionId: String
+    public let optionId: String?
+    public let answerText: String
+
+    enum CodingKeys: String, CodingKey {
+        case questionId = "question_id"
+        case optionId = "option_id"
+        case answerText = "answer_text"
+    }
+}
 
 public struct HistoryMessage: Codable, Sendable {
     public let role: String

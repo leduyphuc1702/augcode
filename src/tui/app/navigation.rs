@@ -777,6 +777,10 @@ impl App {
 
     /// Returns true if this was a scroll-only event (safe to defer redraw during streaming)
     pub(super) fn handle_mouse_event(&mut self, mouse: MouseEvent) -> bool {
+        if self.workflow_modal.is_some() {
+            return self.handle_workflow_modal_mouse(mouse);
+        }
+
         if self.changelog_scroll.is_some() {
             match mouse.kind {
                 MouseEventKind::ScrollUp => {

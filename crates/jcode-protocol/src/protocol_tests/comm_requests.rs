@@ -26,6 +26,149 @@ fn test_comm_propose_plan_roundtrip() -> Result<()> {
 }
 
 #[test]
+fn test_comm_comment_plan_roundtrip() -> Result<()> {
+    let req = Request::CommCommentPlan {
+        id: 43,
+        session_id: "coord".to_string(),
+        proposer_session: "worker".to_string(),
+        comments: vec![PlanProposalComment {
+            range_start: 1,
+            range_end: 2,
+            text: "Split validation into a separate task.".to_string(),
+            quote: Some("Validate inputs".to_string()),
+        }],
+    };
+    let json = serde_json::to_string(&req)?;
+    assert!(json.contains("\"type\":\"comm_comment_plan\""));
+    let decoded = parse_request_json(&json)?;
+    assert_eq!(decoded.id(), 43);
+    let Request::CommCommentPlan {
+        proposer_session,
+        comments,
+        ..
+    } = decoded
+    else {
+        return Err(anyhow!("wrong request type"));
+    };
+    assert_eq!(proposer_session, "worker");
+    assert_eq!(comments[0].range_start, 1);
+    assert_eq!(comments[0].quote.as_deref(), Some("Validate inputs"));
+    Ok(())
+}
+
+#[test]
+fn test_workflow_question_roundtrip() -> Result<()> {
+    let req = Request::WorkflowAskQuestion {
+        id: 44,
+        from_session: "worker".to_string(),
+        to_session: "coord".to_string(),
+        question_id: "q-1".to_string(),
+        question: "Pick scope".to_string(),
+        options: vec![QuestionOption {
+            id: "small".to_string(),
+            label: "Small".to_string(),
+            description: Some("Minimal change".to_string()),
+        }],
+        allow_freeform: true,
+    };
+    let json = serde_json::to_string(&req)?;
+    assert!(json.contains("\"type\":\"workflow_ask_question\""));
+    let decoded = parse_request_json(&json)?;
+    assert_eq!(decoded.id(), 44);
+    let Request::WorkflowAskQuestion {
+        question_id,
+        options,
+        allow_freeform,
+        ..
+    } = decoded
+    else {
+        return Err(anyhow!("wrong request type"));
+    };
+    assert_eq!(question_id, "q-1");
+    assert_eq!(options[0].id, "small");
+    assert!(allow_freeform);
+    Ok(())
+}
+
+#[test]
+fn test_workflow_answer_roundtrip() -> Result<()> {
+    let req = Request::WorkflowAnswerQuestion {
+        id: 45,
+        from_session: "coord".to_string(),
+        to_session: "worker".to_string(),
+        answer: WorkflowQuestionAnswer {
+            question_id: "q-1".to_string(),
+            option_id: Some("small".to_string()),
+            answer_text: "Small".to_string(),
+        },
+    };
+    let json = serde_json::to_string(&req)?;
+    assert!(json.contains("\"type\":\"workflow_answer_question\""));
+    let decoded = parse_request_json(&json)?;
+    assert_eq!(decoded.id(), 45);
+    let Request::WorkflowAnswerQuestion { answer, .. } = decoded else {
+        return Err(anyhow!("wrong request type"));
+    };
+    assert_eq!(answer.question_id, "q-1");
+    assert_eq!(answer.option_id.as_deref(), Some("small"));
+    Ok(())
+}
+
+#[test]
+fn test_workflow_question_event_roundtrip() -> Result<()> {
+    let event = ServerEvent::WorkflowQuestion {
+        question_id: "q-1".to_string(),
+        from_session: "worker".to_string(),
+        from_name: Some("worker".to_string()),
+        question: "Pick scope".to_string(),
+        options: vec![QuestionOption {
+            id: "small".to_string(),
+            label: "Small".to_string(),
+            description: None,
+        }],
+        allow_freeform: false,
+    };
+    let json = encode_event(&event);
+    assert!(json.contains("\"type\":\"workflow_question\""));
+    let decoded = parse_event_json(json.trim())?;
+    let ServerEvent::WorkflowQuestion {
+        question_id,
+        options,
+        allow_freeform,
+        ..
+    } = decoded
+    else {
+        return Err(anyhow!("expected WorkflowQuestion"));
+    };
+    assert_eq!(question_id, "q-1");
+    assert_eq!(options[0].label, "Small");
+    assert!(!allow_freeform);
+    Ok(())
+}
+
+#[test]
+fn test_workflow_answer_event_roundtrip() -> Result<()> {
+    let event = ServerEvent::WorkflowQuestionAnswered {
+        question_id: "q-1".to_string(),
+        from_session: "coord".to_string(),
+        from_name: None,
+        answer: WorkflowQuestionAnswer {
+            question_id: "q-1".to_string(),
+            option_id: None,
+            answer_text: "Use smaller scope".to_string(),
+        },
+    };
+    let json = encode_event(&event);
+    assert!(json.contains("\"type\":\"workflow_question_answered\""));
+    let decoded = parse_event_json(json.trim())?;
+    let ServerEvent::WorkflowQuestionAnswered { answer, .. } = decoded else {
+        return Err(anyhow!("expected WorkflowQuestionAnswered"));
+    };
+    assert_eq!(answer.answer_text, "Use smaller scope");
+    Ok(())
+}
+
+#[test]
 fn test_stdin_response_roundtrip() -> Result<()> {
     let req = Request::StdinResponse {
         id: 99,

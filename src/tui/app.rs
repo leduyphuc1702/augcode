@@ -56,6 +56,7 @@ mod commands;
 mod commands_improve;
 mod commands_overnight;
 mod commands_review;
+mod context_view;
 mod conversation_state;
 mod copy_selection;
 mod debug;
@@ -89,6 +90,7 @@ mod tui_lifecycle_runtime;
 mod tui_state;
 mod turn;
 mod turn_memory;
+mod workflow;
 
 pub(crate) use self::state_ui_storage::compact_display_messages_for_storage;
 
@@ -827,6 +829,10 @@ pub struct App {
     todos_view_markdown: String,
     todos_view_updated_at_ms: u64,
     todos_view_rendered_hash: u64,
+    context_view_enabled: bool,
+    context_view_markdown: String,
+    context_view_updated_at_ms: u64,
+    context_view_rendered_hash: u64,
     last_side_panel_refresh: Option<Instant>,
     // Most recently persisted focus target for dictation routing.
     last_client_focus_recorded_at: Option<Instant>,
@@ -844,6 +850,8 @@ pub struct App {
     side_panel_native_scrollbar: bool,
     // Passive inline UI (informational blocks shown above input).
     inline_view_state: Option<super::InlineViewState>,
+    workflow_modal: Option<crate::tui::workflow_modal::WorkflowModalState>,
+    pending_workflow_action: Option<crate::tui::workflow_modal::WorkflowPendingAction>,
     // Interactive model/provider picker
     inline_interactive_state: Option<super::InlineInteractiveState>,
     // Cached model picker entries. Building these can require hydrating large provider catalogs.

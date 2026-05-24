@@ -917,6 +917,7 @@ pub(in crate::tui::app) fn handle_server_event(
                 snapshot.participants,
                 snapshot.reason,
             );
+            app.ensure_workflow_side_panel_pages(false);
             app.set_status_notice(notice);
             false
         }
@@ -925,17 +926,56 @@ pub(in crate::tui::app) fn handle_server_event(
             proposer_session,
             proposer_name,
             summary,
-            ..
+            items,
+            proposal_key,
         } => {
-            let proposer =
-                proposer_name.unwrap_or_else(|| proposer_session.chars().take(8).collect());
+            let proposer = proposer_name
+                .clone()
+                .unwrap_or_else(|| proposer_session.chars().take(8).collect());
             let message = format!(
                 "Plan proposal received in swarm {}\nFrom: {}\nSummary: {}",
                 swarm_id, proposer, summary
             );
             app.push_display_message(DisplayMessage::system(message.clone()));
             persist_replay_display_message(app, "system", None, &message);
+            app.open_plan_workflow_modal(
+                swarm_id,
+                proposer_session,
+                proposer_name,
+                items,
+                summary,
+                proposal_key,
+            );
+            app.ensure_workflow_side_panel_pages(true);
             app.set_status_notice("Plan proposal received");
+            false
+        }
+        ServerEvent::WorkflowQuestion {
+            question_id,
+            from_session,
+            from_name,
+            question,
+            options,
+            allow_freeform,
+        } => {
+            app.open_question_workflow_modal(
+                question_id,
+                from_session,
+                from_name,
+                question,
+                options,
+                allow_freeform,
+            );
+            app.ensure_workflow_side_panel_pages(false);
+            app.set_status_notice("Workflow question");
+            false
+        }
+        ServerEvent::WorkflowQuestionAnswered { answer, .. } => {
+            app.push_display_message(DisplayMessage::system(format!(
+                "Workflow answer: {}",
+                answer.answer_text
+            )));
+            app.set_status_notice("Workflow answer received");
             false
         }
         ServerEvent::McpStatus { servers } => {

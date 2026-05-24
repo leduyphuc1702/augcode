@@ -811,11 +811,7 @@ pub(super) fn gather_memory_info(memory_enabled: bool) -> Option<MemoryInfo> {
     let activity = crate::memory::get_activity();
     let sidecar_model = if crate::memory::memory_sidecar_enabled() {
         let sidecar = crate::sidecar::Sidecar::new();
-        Some(format!(
-            "{} · {}",
-            sidecar.backend_name(),
-            sidecar.model_name()
-        ))
+        Some(sidecar.display_label())
     } else {
         None
     };
@@ -881,11 +877,7 @@ fn gather_memory_info_inner() -> Option<MemoryInfo> {
     let activity = crate::memory::get_activity();
     let sidecar_model = if crate::memory::memory_sidecar_enabled() {
         let sidecar = crate::sidecar::Sidecar::new();
-        Some(format!(
-            "{} · {}",
-            sidecar.backend_name(),
-            sidecar.model_name()
-        ))
+        Some(sidecar.display_label())
     } else {
         None
     };

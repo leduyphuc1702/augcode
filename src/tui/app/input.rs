@@ -1268,6 +1268,11 @@ pub(super) fn handle_modal_key(
     code: KeyCode,
     modifiers: KeyModifiers,
 ) -> Result<bool> {
+    if app.workflow_modal.is_some() {
+        app.handle_workflow_modal_key(code, modifiers);
+        return Ok(true);
+    }
+
     if app.changelog_scroll.is_some() {
         app.handle_changelog_key(code)?;
         return Ok(true);

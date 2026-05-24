@@ -1240,6 +1240,10 @@ impl crate::tui::TuiState for App {
         self.inline_view_state.as_ref()
     }
 
+    fn workflow_modal(&self) -> Option<&crate::tui::workflow_modal::WorkflowModalState> {
+        self.workflow_modal.as_ref()
+    }
+
     fn changelog_scroll(&self) -> Option<usize> {
         self.changelog_scroll
     }
