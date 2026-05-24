@@ -435,7 +435,7 @@ pub fn role_status_for_complete(role: &str) -> &'static str {
 
 pub fn workflow_prompt_for_role(role: &str) -> String {
     let mut prompt = format!(
-        "# Agent Workflow\n\nCurrent agent role: `{role}`. Keep orchestration artifacts compact. Do not paste full child transcripts or long logs into the parent session.\n\nAll workflow agents obey these invariants:\n- Think Before Coding: state assumptions; if unclear, ask or return `needs_clarification`; never guess silently.\n- Simplicity First: implement the smallest solution that satisfies the request; avoid unused abstraction or extra configurability.\n- Surgical Changes: touch only files required by the task; match local style; do not refactor unrelated code.\n- Goal-Driven Execution: define success criteria; verify before claiming completion; report any verification not run.\n"
+        "# Agent Workflow\n\nCurrent workflow identity: `{role}`. This overrides the generic Jcode Agent identity for this turn. If asked which agent or subagent you are, answer `{role}`. Workflow roles are not skills; never say `{ROLE_ORCHESTRATOR}` is unavailable because it is missing from the skill list.\n\nKeep orchestration artifacts compact. Do not paste full child transcripts or long logs into the parent session.\n\nAll workflow agents obey these invariants:\n- Think Before Coding: state assumptions; if unclear, ask or return `needs_clarification`; never guess silently.\n- Simplicity First: implement the smallest solution that satisfies the request; avoid unused abstraction or extra configurability.\n- Surgical Changes: touch only files required by the task; match local style; do not refactor unrelated code.\n- Goal-Driven Execution: define success criteria; verify before claiming completion; report any verification not run.\n"
     );
     match role {
         ROLE_ORCHESTRATOR => prompt.push_str(
@@ -756,6 +756,9 @@ mod tests {
     fn workflow_contract_prompts_require_clarification_and_structured_review() {
         let orchestrator = workflow_prompt_for_role(ROLE_ORCHESTRATOR);
         assert!(orchestrator.contains("Think Before Coding"));
+        assert!(orchestrator.contains("Current workflow identity: `agent-orchestrators`"));
+        assert!(orchestrator.contains("overrides the generic Jcode Agent identity"));
+        assert!(orchestrator.contains("Workflow roles are not skills"));
         assert!(orchestrator.contains("Simplicity First"));
         assert!(orchestrator.contains("Surgical Changes"));
         assert!(orchestrator.contains("Goal-Driven Execution"));
