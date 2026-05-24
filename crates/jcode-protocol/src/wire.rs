@@ -750,6 +750,40 @@ pub enum ServerEvent {
         answer: WorkflowQuestionAnswer,
     },
 
+    /// Workflow state machine phase update.
+    #[serde(rename = "workflow_phase_changed")]
+    WorkflowPhaseChanged {
+        session_id: String,
+        phase: String,
+        status: String,
+    },
+
+    /// Compact report emitted after a workflow subagent completes.
+    #[serde(rename = "workflow_agent_report")]
+    WorkflowAgentReport {
+        session_id: String,
+        task_id: String,
+        agent_role: String,
+        summary: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        validation: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        risks: Vec<String>,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        next_action: String,
+    },
+
+    /// User approval gate for spec, final plan, or code review.
+    #[serde(rename = "workflow_approval_requested")]
+    WorkflowApprovalRequested {
+        session_id: String,
+        approval_id: String,
+        kind: String,
+        summary: String,
+        #[serde(default)]
+        allow_comments: bool,
+    },
+
     /// Soft interrupt message was injected at a safe point
     #[serde(rename = "soft_interrupt_injected")]
     SoftInterruptInjected {

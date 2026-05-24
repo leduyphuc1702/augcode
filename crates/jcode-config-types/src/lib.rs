@@ -357,6 +357,20 @@ pub struct AuthConfig {
 pub struct AgentsConfig {
     /// Optional default model override for spawned swarm/subagent sessions.
     pub swarm_model: Option<String>,
+    /// Optional default model override for the root workflow orchestrator.
+    pub agent_orchestrators_model: Option<String>,
+    /// Optional default model override for workflow plan drafting.
+    pub plan_agent_model: Option<String>,
+    /// Optional default model override for workflow plan review.
+    pub plan_reviewer_model: Option<String>,
+    /// Optional default model override for workflow plan finalization.
+    pub plan_finalizer_model: Option<String>,
+    /// Optional default model override for workflow frontend implementation.
+    pub frontend_agent_model: Option<String>,
+    /// Optional default model override for workflow backend implementation.
+    pub backend_agent_model: Option<String>,
+    /// Optional default model override for workflow code review.
+    pub code_reviewer_model: Option<String>,
     /// Default terminal mode for swarm-created agents.
     pub swarm_spawn_mode: SwarmSpawnMode,
     /// Optional default model override for the memory sidecar.

@@ -2123,6 +2123,25 @@ fn parse_agents_target(raw: &str) -> Option<crate::tui::AgentModelTarget> {
         "swarm" | "agent" | "agents" | "subagent" | "subagents" => {
             Some(crate::tui::AgentModelTarget::Swarm)
         }
+        "agent-orchestrators" | "agent_orchestrators" | "orchestrator" | "orchestrators" => {
+            Some(crate::tui::AgentModelTarget::AgentOrchestrators)
+        }
+        "plan-agent" | "plan_agent" | "planner" => Some(crate::tui::AgentModelTarget::PlanAgent),
+        "plan-reviewer" | "plan_reviewer" | "planner-reviewer" => {
+            Some(crate::tui::AgentModelTarget::PlanReviewer)
+        }
+        "plan-finalizer" | "plan_finalizer" | "finalizer" => {
+            Some(crate::tui::AgentModelTarget::PlanFinalizer)
+        }
+        "frontend-agent" | "frontend_agent" | "frontend" | "ui" => {
+            Some(crate::tui::AgentModelTarget::FrontendAgent)
+        }
+        "backend-agent" | "backend_agent" | "backend" | "api" => {
+            Some(crate::tui::AgentModelTarget::BackendAgent)
+        }
+        "code-reviewer" | "code_reviewer" | "workflow-reviewer" => {
+            Some(crate::tui::AgentModelTarget::CodeReviewer)
+        }
         "review" | "reviewer" | "code-review" | "codereview" => {
             Some(crate::tui::AgentModelTarget::Review)
         }
@@ -2148,7 +2167,7 @@ pub(super) fn handle_agents_command(app: &mut App, trimmed: &str) -> bool {
 
     let Some(target) = parse_agents_target(rest) else {
         app.push_display_message(DisplayMessage::error(
-            "Usage: `/agents` or `/agents <swarm|review|judge|memory|ambient>`".to_string(),
+            "Usage: `/agents` or `/agents <swarm|agent-orchestrators|plan-agent|plan-reviewer|plan-finalizer|frontend-agent|backend-agent|code-reviewer|review|judge|memory|ambient>`".to_string(),
         ));
         return true;
     };

@@ -84,6 +84,7 @@ pub(super) fn picker_account_provider_scope(picker: &InlineInteractiveState) -> 
             provider_filter: None,
         })
         | PickerAction::Model
+        | PickerAction::RefreshModels
         | PickerAction::Login(_)
         | PickerAction::Usage { .. }
         | PickerAction::AgentTarget(_)

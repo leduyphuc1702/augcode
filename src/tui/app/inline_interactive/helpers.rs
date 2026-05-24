@@ -46,6 +46,13 @@ pub(super) fn catchup_queue_position(
 pub(super) fn agent_model_target_label(target: AgentModelTarget) -> &'static str {
     match target {
         AgentModelTarget::Swarm => "Swarm / subagent",
+        AgentModelTarget::AgentOrchestrators => "agent-orchestrators",
+        AgentModelTarget::PlanAgent => "plan-agent",
+        AgentModelTarget::PlanReviewer => "plan-reviewer",
+        AgentModelTarget::PlanFinalizer => "plan-finalizer",
+        AgentModelTarget::FrontendAgent => "frontend-agent",
+        AgentModelTarget::BackendAgent => "backend-agent",
+        AgentModelTarget::CodeReviewer => "code-reviewer",
         AgentModelTarget::Review => "Code review",
         AgentModelTarget::Judge => "Judge",
         AgentModelTarget::Memory => "Memory",
@@ -56,6 +63,13 @@ pub(super) fn agent_model_target_label(target: AgentModelTarget) -> &'static str
 pub(super) fn agent_model_target_slug(target: AgentModelTarget) -> &'static str {
     match target {
         AgentModelTarget::Swarm => "swarm",
+        AgentModelTarget::AgentOrchestrators => "agent-orchestrators",
+        AgentModelTarget::PlanAgent => "plan-agent",
+        AgentModelTarget::PlanReviewer => "plan-reviewer",
+        AgentModelTarget::PlanFinalizer => "plan-finalizer",
+        AgentModelTarget::FrontendAgent => "frontend-agent",
+        AgentModelTarget::BackendAgent => "backend-agent",
+        AgentModelTarget::CodeReviewer => "code-reviewer",
         AgentModelTarget::Review => "review",
         AgentModelTarget::Judge => "judge",
         AgentModelTarget::Memory => "memory",
@@ -66,6 +80,13 @@ pub(super) fn agent_model_target_slug(target: AgentModelTarget) -> &'static str 
 pub(super) fn agent_model_target_config_path(target: AgentModelTarget) -> &'static str {
     match target {
         AgentModelTarget::Swarm => "agents.swarm_model",
+        AgentModelTarget::AgentOrchestrators => "agents.agent_orchestrators_model",
+        AgentModelTarget::PlanAgent => "agents.plan_agent_model",
+        AgentModelTarget::PlanReviewer => "agents.plan_reviewer_model",
+        AgentModelTarget::PlanFinalizer => "agents.plan_finalizer_model",
+        AgentModelTarget::FrontendAgent => "agents.frontend_agent_model",
+        AgentModelTarget::BackendAgent => "agents.backend_agent_model",
+        AgentModelTarget::CodeReviewer => "agents.code_reviewer_model",
         AgentModelTarget::Review => "autoreview.model",
         AgentModelTarget::Judge => "autojudge.model",
         AgentModelTarget::Memory => "agents.memory_model",
@@ -77,6 +98,13 @@ pub(super) fn load_agent_model_override(target: AgentModelTarget) -> Option<Stri
     let cfg = crate::config::Config::load();
     match target {
         AgentModelTarget::Swarm => cfg.agents.swarm_model,
+        AgentModelTarget::AgentOrchestrators => cfg.agents.agent_orchestrators_model,
+        AgentModelTarget::PlanAgent => cfg.agents.plan_agent_model,
+        AgentModelTarget::PlanReviewer => cfg.agents.plan_reviewer_model,
+        AgentModelTarget::PlanFinalizer => cfg.agents.plan_finalizer_model,
+        AgentModelTarget::FrontendAgent => cfg.agents.frontend_agent_model,
+        AgentModelTarget::BackendAgent => cfg.agents.backend_agent_model,
+        AgentModelTarget::CodeReviewer => cfg.agents.code_reviewer_model,
         AgentModelTarget::Review => cfg.autoreview.model,
         AgentModelTarget::Judge => cfg.autojudge.model,
         AgentModelTarget::Memory => cfg.agents.memory_model,
@@ -95,6 +123,13 @@ pub(super) fn save_agent_model_override(
         .map(str::to_string);
     match target {
         AgentModelTarget::Swarm => cfg.agents.swarm_model = value,
+        AgentModelTarget::AgentOrchestrators => cfg.agents.agent_orchestrators_model = value,
+        AgentModelTarget::PlanAgent => cfg.agents.plan_agent_model = value,
+        AgentModelTarget::PlanReviewer => cfg.agents.plan_reviewer_model = value,
+        AgentModelTarget::PlanFinalizer => cfg.agents.plan_finalizer_model = value,
+        AgentModelTarget::FrontendAgent => cfg.agents.frontend_agent_model = value,
+        AgentModelTarget::BackendAgent => cfg.agents.backend_agent_model = value,
+        AgentModelTarget::CodeReviewer => cfg.agents.code_reviewer_model = value,
         AgentModelTarget::Review => cfg.autoreview.model = value,
         AgentModelTarget::Judge => cfg.autojudge.model = value,
         AgentModelTarget::Memory => cfg.agents.memory_model = value,
@@ -173,6 +208,13 @@ pub(super) fn agent_model_inherit_fallback_label(target: AgentModelTarget) -> &'
     match target {
         AgentModelTarget::Memory => "main model",
         AgentModelTarget::Swarm
+        | AgentModelTarget::AgentOrchestrators
+        | AgentModelTarget::PlanAgent
+        | AgentModelTarget::PlanReviewer
+        | AgentModelTarget::PlanFinalizer
+        | AgentModelTarget::FrontendAgent
+        | AgentModelTarget::BackendAgent
+        | AgentModelTarget::CodeReviewer
         | AgentModelTarget::Review
         | AgentModelTarget::Judge
         | AgentModelTarget::Ambient => "provider default",
@@ -203,6 +245,16 @@ pub(super) fn agent_model_default_summary(target: AgentModelTarget, app: &App) -
     let summary = match target {
         AgentModelTarget::Swarm => load_agent_model_override(target)
             .or_else(|| app.session.subagent_model.clone())
+            .or_else(|| Some(app.provider.model())),
+        AgentModelTarget::AgentOrchestrators
+        | AgentModelTarget::PlanAgent
+        | AgentModelTarget::PlanReviewer
+        | AgentModelTarget::PlanFinalizer
+        | AgentModelTarget::FrontendAgent
+        | AgentModelTarget::BackendAgent
+        | AgentModelTarget::CodeReviewer => load_agent_model_override(target)
+            .or_else(|| app.session.subagent_model.clone())
+            .or_else(|| crate::config::config().agents.swarm_model.clone())
             .or_else(|| Some(app.provider.model())),
         AgentModelTarget::Review => load_agent_model_override(target)
             .or_else(|| super::commands::preferred_one_shot_review_override().map(|(m, _)| m))

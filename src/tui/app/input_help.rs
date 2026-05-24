@@ -29,7 +29,7 @@ impl App {
                 "`/refresh-model-list`\nForce-refresh provider model catalogs, update `/model`, and persist the refreshed cache."
             }
             "agents" => {
-                "`/agents`\nOpen the agent-model config picker.\n\n`/agents <swarm|review|judge|memory|ambient>`\nJump straight to that agent role's saved model override."
+                "`/agents`\nOpen the agent-model config picker.\n\n`/agents <agent-orchestrators|plan-agent|plan-reviewer|plan-finalizer|frontend-agent|backend-agent|code-reviewer>`\nJump straight to a workflow role's saved model override."
             }
             "subagent" => {
                 "`/subagent <prompt>`\nLaunch a subagent immediately.\n\nOptional flags:\n- `--type <kind>` sets the subagent type (default `general`)\n- `--model <name>` overrides the subagent model for this run\n- `--continue <session_id>` resumes an existing subagent session"

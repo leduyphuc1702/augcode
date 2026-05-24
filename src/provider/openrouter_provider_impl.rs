@@ -864,7 +864,13 @@ impl Provider for OpenRouterProvider {
                         .as_ref()
                         .map(|live| !live.contains(&model))
                         .unwrap_or_else(|| static_model_ids.contains(&model));
-                let route_detail = if fallback_not_live {
+                let route_detail = if !self.supports_model_catalog && is_direct_profile {
+                    if detail.trim().is_empty() {
+                        "model_catalog=false; live /v1/models disabled".to_string()
+                    } else {
+                        format!("{}; model_catalog=false; live /v1/models disabled", detail)
+                    }
+                } else if fallback_not_live {
                     if detail.trim().is_empty() {
                         "fallback: not from live /models catalog".to_string()
                     } else {

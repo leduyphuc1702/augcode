@@ -253,6 +253,42 @@ fn named_openai_compatible_provider_exposes_static_models_as_routes() {
 }
 
 #[test]
+fn named_local_openai_compatible_catalog_off_shows_default_and_static_models() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    let _namespace = EnvVarGuard::remove("JCODE_OPENROUTER_CACHE_NAMESPACE");
+
+    let profile = crate::config::NamedProviderConfig {
+        base_url: "http://127.0.0.1:20128/v1".to_string(),
+        auth: crate::config::NamedProviderAuth::None,
+        model_catalog: false,
+        default_model: Some("cx/gpt-5.5".to_string()),
+        models: vec![crate::config::NamedProviderModelConfig {
+            id: "kimi/kimi-k2.6-thinking".to_string(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let provider = OpenRouterProvider::new_named_openai_compatible("9router", &profile)
+        .expect("local named profile should initialize");
+    let display = provider.available_models_display();
+    assert!(display.iter().any(|model| model == "cx/gpt-5.5"));
+    assert!(
+        display
+            .iter()
+            .any(|model| model == "kimi/kimi-k2.6-thinking")
+    );
+
+    let routes = provider.model_routes();
+    let route = routes
+        .iter()
+        .find(|route| route.model == "cx/gpt-5.5")
+        .expect("default model route");
+    assert_eq!(route.api_method, "openai-compatible:9router");
+    assert!(route.detail.contains("model_catalog=false"));
+}
+
+#[test]
 fn minimax_profile_exposes_static_models_before_catalog_refresh() {
     let models = crate::provider_catalog::openai_compatible_profile_static_models(
         jcode_provider_metadata::MINIMAX_PROFILE,

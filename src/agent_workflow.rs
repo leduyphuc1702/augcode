@@ -26,6 +26,76 @@ pub const STATUS_REJECTED: &str = "rejected";
 const ARTIFACT_MAX_CHARS: usize = 16_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowPhase {
+    Intake,
+    SpecDraft,
+    PlanDraft,
+    PlanReview,
+    PlanFinal,
+    AwaitPlanApproval,
+    Implementation,
+    CodeReview,
+    AwaitReviewApproval,
+    Done,
+    Rework,
+}
+
+impl Default for WorkflowPhase {
+    fn default() -> Self {
+        Self::Intake
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(default)]
+pub struct WorkflowSpec {
+    pub user_intent: String,
+    pub context: String,
+    pub role: String,
+    pub objectives: Vec<String>,
+    pub constraints: Vec<String>,
+    pub deliverables: Vec<String>,
+    pub acceptance_criteria: Vec<String>,
+    pub assumptions: Vec<String>,
+    pub open_questions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(default)]
+pub struct WorkflowSubtask {
+    pub id: String,
+    pub agent_role: String,
+    pub scope: String,
+    pub optimized_prompt: String,
+    pub expected_output: String,
+    pub skill_hints: Vec<String>,
+    pub depends_on: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(default)]
+pub struct WorkflowAgentReport {
+    pub task_id: String,
+    pub agent_role: String,
+    pub summary: String,
+    pub scope_control: String,
+    pub files_changed: Vec<String>,
+    pub commands_run: Vec<String>,
+    pub validation: String,
+    pub risks: Vec<String>,
+    pub next_action: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(default)]
+pub struct WorkflowDecision {
+    pub decision: String,
+    pub target_phase: WorkflowPhase,
+    pub comments: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct AgentWorkflowTaskState {
     pub id: String,
@@ -81,8 +151,13 @@ impl Default for RemoteSkillGrant {
 #[serde(default)]
 pub struct AgentWorkflowState {
     pub status: String,
+    pub phase: WorkflowPhase,
+    pub spec: Option<WorkflowSpec>,
     pub final_plan: Option<String>,
     pub review: Option<String>,
+    pub subtasks: Vec<WorkflowSubtask>,
+    pub reports: Vec<WorkflowAgentReport>,
+    pub decisions: Vec<WorkflowDecision>,
     pub tasks: Vec<AgentWorkflowTaskState>,
     pub remote_skill_grants: Vec<RemoteSkillGrant>,
 }
@@ -91,8 +166,13 @@ impl Default for AgentWorkflowState {
     fn default() -> Self {
         Self {
             status: STATUS_IDLE.to_string(),
+            phase: WorkflowPhase::Intake,
+            spec: None,
             final_plan: None,
             review: None,
+            subtasks: Vec::new(),
+            reports: Vec::new(),
+            decisions: Vec::new(),
             tasks: Vec::new(),
             remote_skill_grants: Vec::new(),
         }
@@ -103,28 +183,34 @@ impl AgentWorkflowState {
     pub fn submit_final_plan(&mut self, plan: impl Into<String>) {
         self.final_plan = Some(plan.into());
         self.status = STATUS_AWAITING_PLAN_APPROVAL.to_string();
+        self.phase = WorkflowPhase::AwaitPlanApproval;
     }
 
     pub fn submit_review(&mut self, review: impl Into<String>) {
         self.review = Some(review.into());
         self.status = STATUS_AWAITING_REVIEW_APPROVAL.to_string();
+        self.phase = WorkflowPhase::AwaitReviewApproval;
     }
 
     pub fn approve_plan(&mut self) {
         self.status = STATUS_IMPLEMENTATION_ALLOWED.to_string();
+        self.phase = WorkflowPhase::Implementation;
     }
 
     pub fn reject_plan(&mut self, reason: Option<&str>) {
         self.status = STATUS_REJECTED.to_string();
+        self.phase = WorkflowPhase::Rework;
         self.review = reason.map(str::to_string);
     }
 
     pub fn approve_review(&mut self) {
         self.status = STATUS_COMPLETED.to_string();
+        self.phase = WorkflowPhase::Done;
     }
 
     pub fn reject_review(&mut self, reason: Option<&str>) {
         self.status = STATUS_IMPLEMENTATION_ALLOWED.to_string();
+        self.phase = WorkflowPhase::Rework;
         self.review = reason.map(str::to_string);
     }
 
@@ -168,6 +254,18 @@ impl AgentWorkflowState {
             self.tasks.push(task);
         }
     }
+
+    pub fn set_phase_for_role_start(&mut self, role: &str) {
+        self.phase = match role {
+            ROLE_PLAN_AGENT => WorkflowPhase::PlanDraft,
+            ROLE_PLAN_REVIEWER => WorkflowPhase::PlanReview,
+            ROLE_PLAN_FINALIZER => WorkflowPhase::PlanFinal,
+            ROLE_FRONTEND | ROLE_BACKEND => WorkflowPhase::Implementation,
+            ROLE_CODE_REVIEWER => WorkflowPhase::CodeReview,
+            _ => self.phase.clone(),
+        };
+        self.status = role_status_for_start(role).to_string();
+    }
 }
 
 pub fn enabled() -> bool {
@@ -188,6 +286,68 @@ pub fn roles() -> &'static [&'static str] {
 
 pub fn is_known_role(role: &str) -> bool {
     roles().contains(&role)
+}
+
+pub fn role_model_override(role: &str) -> Option<String> {
+    let agents = &crate::config::config().agents;
+    match role {
+        ROLE_ORCHESTRATOR => agents.agent_orchestrators_model.clone(),
+        ROLE_PLAN_AGENT => agents.plan_agent_model.clone(),
+        ROLE_PLAN_REVIEWER => agents.plan_reviewer_model.clone(),
+        ROLE_PLAN_FINALIZER => agents.plan_finalizer_model.clone(),
+        ROLE_FRONTEND => agents.frontend_agent_model.clone(),
+        ROLE_BACKEND => agents.backend_agent_model.clone(),
+        ROLE_CODE_REVIEWER => agents.code_reviewer_model.clone(),
+        _ => None,
+    }
+    .filter(|value| !value.trim().is_empty())
+}
+
+pub fn role_skill_hints(role: &str) -> &'static [&'static str] {
+    match role {
+        ROLE_ORCHESTRATOR => &[
+            "prompt master",
+            "skills search/create",
+            "brainstorm",
+            "critique",
+            "requirement analysis",
+            "system architecture",
+            "API contract",
+            "gitnexus-cli",
+            "agentmemory",
+        ],
+        ROLE_PLAN_AGENT => &[
+            "database schema",
+            "brainstorming",
+            "ln-200-scope-decomposer",
+            "planning-with-files",
+            "writing-plans",
+        ],
+        ROLE_PLAN_REVIEWER => &["plan-document-reviewer-prompt"],
+        ROLE_PLAN_FINALIZER => &["finishing-a-development-branch", "ln-222-story-replanner"],
+        ROLE_FRONTEND => &[
+            "ui-ux-pro-max",
+            "using-git-worktrees",
+            "vercel-react-best-practices",
+            "web-design-guidelines",
+            "reach doctor",
+        ],
+        ROLE_BACKEND => &[
+            "executing-plans",
+            "subagent-driven-development",
+            "systematic-debugging",
+            "test-driven-development",
+            "using-git-worktrees",
+        ],
+        ROLE_CODE_REVIEWER => &[
+            "receiving-code-review",
+            "requesting-code-review",
+            "test-driven-development",
+            "verification-before-completion",
+            "agent-browser",
+        ],
+        _ => &[],
+    }
 }
 
 pub fn effective_role(session: &Session) -> String {
@@ -395,6 +555,31 @@ pub fn role_can_spawn(parent_state: Option<&AgentWorkflowState>, role: &str) -> 
     let status = parent_state
         .map(|state| state.status.as_str())
         .unwrap_or(STATUS_IDLE);
+    let task_done = |done_role: &str| {
+        parent_state
+            .map(|state| {
+                state.tasks.iter().any(|task| {
+                    task.agent_role == done_role
+                        && task
+                            .summary
+                            .as_ref()
+                            .is_some_and(|value| !value.trim().is_empty())
+                })
+            })
+            .unwrap_or(false)
+    };
+    match role {
+        ROLE_PLAN_AGENT => {}
+        ROLE_PLAN_REVIEWER if !task_done(ROLE_PLAN_AGENT) => {
+            return Err("plan-reviewer blocked until plan-agent submits an artifact".to_string());
+        }
+        ROLE_PLAN_FINALIZER if !task_done(ROLE_PLAN_REVIEWER) => {
+            return Err(
+                "plan-finalizer blocked until plan-reviewer submits an artifact".to_string(),
+            );
+        }
+        _ => {}
+    }
     if matches!(role, ROLE_FRONTEND | ROLE_BACKEND)
         && !matches!(
             status,
@@ -410,6 +595,12 @@ pub fn role_can_spawn(parent_state: Option<&AgentWorkflowState>, role: &str) -> 
         )
     {
         return Err("code-reviewer blocked until implementation is approved".to_string());
+    }
+    if role == ROLE_CODE_REVIEWER && !(task_done(ROLE_FRONTEND) || task_done(ROLE_BACKEND)) {
+        return Err(
+            "code-reviewer blocked until frontend-agent or backend-agent submits an artifact"
+                .to_string(),
+        );
     }
     Ok(())
 }
@@ -439,7 +630,7 @@ pub fn workflow_prompt_for_role(role: &str) -> String {
     );
     match role {
         ROLE_ORCHESTRATOR => prompt.push_str(
-            "\nAgent-orchestrators contract:\n- You are the default user-facing agent. If the user mentions another agent, still receive the prompt first, then delegate.\n- When requirements are ambiguous or risky, ask concise clarifying questions before delegation.\n- Before each delegation, briefly cover `understanding`, `assumptions`, `critique`, `simpler_option`, and `delegation`.\n- Use `plan-agent`, `plan-reviewer`, then `plan-finalizer` before implementation. Use stable `workflow_task_id`s so child sessions resume.\n- Submit the final plan with `agent_workflow submit_final_plan`, then stop for `/approve-plan`.\n- After implementation agents finish, delegate `code-reviewer`, summarize `result_summary`, `verification`, `risks`, and `accept_or_rework`, submit review, then stop for `/approve-review`.\n- Aggregate child artifacts and communication reports only; inspect full transcripts only on explicit debug need.\n",
+            "\nAgent-orchestrators contract:\n- You are the default user-facing agent. If the user mentions another agent, still receive the prompt first, then delegate.\n- Convert the user's request into a compact WorkflowSpec before planning: intent, context, objectives, constraints, deliverables, acceptance_criteria, assumptions, open_questions.\n- Compile optimized subagent prompts with exact scope, relevant context, acceptance criteria, expected output, and selected skill hints; never forward an underspecified raw prompt.\n- When requirements are ambiguous or risky, ask concise structured questions before delegation.\n- Before each delegation, briefly cover `understanding`, `assumptions`, `critique`, `simpler_option`, and `delegation`.\n- Use `plan-agent`, `plan-reviewer`, then `plan-finalizer` before implementation. Use stable `workflow_task_id`s so child sessions resume.\n- Submit the final plan with `agent_workflow submit_final_plan`, then stop for `/approve-plan`.\n- After implementation agents finish, delegate `code-reviewer`, summarize `result_summary`, `verification`, `risks`, and `accept_or_rework`, submit review, then stop for `/approve-review`.\n- Aggregate child artifacts and communication reports only; inspect full transcripts only on explicit debug need.\n",
         ),
         ROLE_PLAN_AGENT | ROLE_PLAN_REVIEWER | ROLE_PLAN_FINALIZER => prompt.push_str(
             "\nPlanning contract: produce compact planning artifacts only. If scope is unclear, return `needs_clarification` with exact questions. Do not edit files.\n",
@@ -451,6 +642,14 @@ pub fn workflow_prompt_for_role(role: &str) -> String {
             "\nReview contract: review and verify; do not edit files. Lead with findings, test results, residual risk, and accept_or_rework recommendation.\n",
         ),
         _ => {}
+    }
+    let hints = role_skill_hints(role);
+    if !hints.is_empty() {
+        prompt.push_str(
+            "\nRole skill hints (route/load only when relevant; missing hints are non-fatal): ",
+        );
+        prompt.push_str(&hints.join(", "));
+        prompt.push('\n');
     }
     prompt
 }
@@ -481,7 +680,7 @@ pub fn workflow_allows_implementation_mutation(session: &Session) -> Result<(), 
 
 pub fn artifact_prompt(role: &str, task_id: Option<&str>) -> String {
     format!(
-        "\n\n<agent_workflow_contract>\nrole: {role}\ntask_id: {}\nReturn only a compact artifact for the orchestrator. Include: summary, assumptions, scope_control, files_changed, commands_run, validation, risks, next_action, handoff. If ambiguity blocks safe work, set next_action to `needs_clarification` and include exact questions; do not guess. Do not paste full logs or full transcripts; store details in this child session.\n</agent_workflow_contract>",
+        "\n\n<agent_workflow_contract>\nrole: {role}\ntask_id: {}\nReturn only a compact artifact for the orchestrator. Include: summary, assumptions, scope_control, files_changed, commands_run, validation, risks, next_action, handoff. For planning roles, include spec_alignment, acceptance_criteria, and rework_needed. If ambiguity blocks safe work, set next_action to `needs_clarification` and include exact questions; do not guess. Do not paste full logs or full transcripts; store details in this child session.\n</agent_workflow_contract>",
         task_id.unwrap_or("unassigned")
     )
 }
@@ -728,6 +927,39 @@ mod tests {
         assert!(planner.contains("swarm"));
         assert!(!planner.contains("bash"));
         assert!(!planner.contains("write"));
+    }
+
+    #[test]
+    fn workflow_role_sequence_blocks_skipped_agents() {
+        let mut state = AgentWorkflowState::default();
+
+        assert!(role_can_spawn(Some(&state), ROLE_PLAN_REVIEWER).is_err());
+        state.upsert_task(AgentWorkflowTaskState {
+            id: "plan".to_string(),
+            agent_role: ROLE_PLAN_AGENT.to_string(),
+            summary: Some("draft".to_string()),
+            ..Default::default()
+        });
+        assert!(role_can_spawn(Some(&state), ROLE_PLAN_REVIEWER).is_ok());
+        assert!(role_can_spawn(Some(&state), ROLE_PLAN_FINALIZER).is_err());
+
+        state.upsert_task(AgentWorkflowTaskState {
+            id: "review".to_string(),
+            agent_role: ROLE_PLAN_REVIEWER.to_string(),
+            summary: Some("review".to_string()),
+            ..Default::default()
+        });
+        assert!(role_can_spawn(Some(&state), ROLE_PLAN_FINALIZER).is_ok());
+
+        state.approve_plan();
+        assert!(role_can_spawn(Some(&state), ROLE_CODE_REVIEWER).is_err());
+        state.upsert_task(AgentWorkflowTaskState {
+            id: "api".to_string(),
+            agent_role: ROLE_BACKEND.to_string(),
+            summary: Some("implemented".to_string()),
+            ..Default::default()
+        });
+        assert!(role_can_spawn(Some(&state), ROLE_CODE_REVIEWER).is_ok());
     }
 
     #[test]

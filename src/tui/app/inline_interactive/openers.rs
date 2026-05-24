@@ -12,6 +12,13 @@ impl App {
     pub(crate) fn open_agents_picker(&mut self) {
         let models = [
             AgentModelTarget::Swarm,
+            AgentModelTarget::AgentOrchestrators,
+            AgentModelTarget::PlanAgent,
+            AgentModelTarget::PlanReviewer,
+            AgentModelTarget::PlanFinalizer,
+            AgentModelTarget::FrontendAgent,
+            AgentModelTarget::BackendAgent,
+            AgentModelTarget::CodeReviewer,
             AgentModelTarget::Review,
             AgentModelTarget::Judge,
             AgentModelTarget::Memory,
