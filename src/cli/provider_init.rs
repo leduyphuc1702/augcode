@@ -97,6 +97,8 @@ pub enum ProviderChoice {
     #[value(alias = "lm-studio")]
     Lmstudio,
     Ollama,
+    #[value(name = "9router", alias = "ninerouter")]
+    NineRouter,
     Chutes,
     #[value(alias = "cerebrascode", alias = "cerberascode")]
     Cerebras,
@@ -157,6 +159,7 @@ impl ProviderChoice {
             Self::XiaomiMimo => "xiaomi-mimo",
             Self::Lmstudio => "lmstudio",
             Self::Ollama => "ollama",
+            Self::NineRouter => "9router",
             Self::Chutes => "chutes",
             Self::Cerebras => "cerebras",
             Self::AlibabaCodingPlan => "alibaba-coding-plan",
@@ -316,6 +319,10 @@ const PROVIDER_CHOICE_LOGIN_PROVIDERS: &[(ProviderChoice, LoginProviderDescripto
     (
         ProviderChoice::Ollama,
         crate::provider_catalog::OLLAMA_LOGIN_PROVIDER,
+    ),
+    (
+        ProviderChoice::NineRouter,
+        crate::provider_catalog::NINE_ROUTER_LOGIN_PROVIDER,
     ),
     (
         ProviderChoice::Chutes,
@@ -1361,6 +1368,7 @@ async fn init_provider_with_options(
         | ProviderChoice::XiaomiMimo
         | ProviderChoice::Lmstudio
         | ProviderChoice::Ollama
+        | ProviderChoice::NineRouter
         | ProviderChoice::Chutes
         | ProviderChoice::Cerebras
         | ProviderChoice::AlibabaCodingPlan

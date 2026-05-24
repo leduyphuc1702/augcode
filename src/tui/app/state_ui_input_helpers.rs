@@ -106,6 +106,7 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     RegisteredCommand::public("/quit", "Exit jcode"),
     RegisteredCommand::public("/auth", "Show authentication status"),
     RegisteredCommand::public("/login", "Login to a provider"),
+    RegisteredCommand::public("/logout", "Logout from a provider"),
     RegisteredCommand::public("/account", "Open the combined account picker"),
     RegisteredCommand::public("/accounts", "Alias for /account"),
     RegisteredCommand::public("/cache", "Show cache stats or set cache TTL"),
@@ -728,6 +729,24 @@ impl App {
                     .map(|provider| (format!("{} {}", base, provider.id), provider.menu_detail)),
             );
             return self.rank_suggestions(input, suggestions);
+        }
+
+        if prefix.starts_with("/logout ") {
+            let suggestions = crate::provider_catalog::tui_login_providers()
+                .iter()
+                .filter(|provider| {
+                    !matches!(
+                        provider.target,
+                        crate::provider_catalog::LoginProviderTarget::AutoImport
+                    )
+                })
+                .map(|provider| (format!("/logout {}", provider.id), provider.menu_detail))
+                .collect();
+            return self.rank_suggestions(input, suggestions);
+        }
+
+        if prefix_trimmed == "/logout" {
+            return vec![("/logout ".into(), "Logout from a provider")];
         }
 
         if prefix.starts_with("/account ") || prefix.starts_with("/accounts ") {

@@ -490,6 +490,29 @@ Paste the API base below.";
     }
 
     #[test]
+    fn nine_router_profile_is_fixed_local_openai_compatible_endpoint() {
+        assert_eq!(NINE_ROUTER_PROFILE.id, "9router");
+        assert_eq!(NINE_ROUTER_PROFILE.api_base, "http://localhost:20128/v1");
+        assert_eq!(NINE_ROUTER_PROFILE.api_key_env, "NINE_ROUTER_API_KEY");
+        assert_eq!(NINE_ROUTER_PROFILE.env_file, "9router.env");
+        assert_eq!(NINE_ROUTER_PROFILE.default_model, None);
+        assert!(!NINE_ROUTER_PROFILE.requires_api_key);
+
+        assert_eq!(
+            NINE_ROUTER_LOGIN_PROVIDER.auth_kind,
+            LoginProviderAuthKind::Local
+        );
+        assert_eq!(
+            NINE_ROUTER_LOGIN_PROVIDER.auth_status_method,
+            "local endpoint"
+        );
+        assert!(matches!(
+            NINE_ROUTER_LOGIN_PROVIDER.target,
+            LoginProviderTarget::OpenAiCompatible(profile) if profile.id == "9router"
+        ));
+    }
+
+    #[test]
     fn matrix_login_provider_aliases_resolve_to_canonical_ids() {
         assert_eq!(
             resolve_login_provider("subscription").map(|provider| provider.id),
@@ -578,6 +601,10 @@ Paste the API base below.";
         assert_eq!(
             resolve_login_provider("lm-studio").map(|provider| provider.id),
             Some("lmstudio")
+        );
+        assert_eq!(
+            resolve_login_provider("ninerouter").map(|provider| provider.id),
+            Some("9router")
         );
         assert_eq!(
             resolve_login_provider("gmail").map(|provider| provider.id),

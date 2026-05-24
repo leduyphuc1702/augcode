@@ -14,6 +14,10 @@ pub(crate) fn handle_auth_command(app: &mut App, trimmed: &str) -> bool {
         return true;
     }
 
+    if handle_logout_command(app, trimmed) {
+        return true;
+    }
+
     if trimmed == "/login" {
         app.show_interactive_login();
         return true;
@@ -72,6 +76,383 @@ pub(crate) async fn handle_account_command_remote(
         Err(message) => app.push_display_message(DisplayMessage::error(message)),
     }
     Ok(true)
+}
+
+fn handle_logout_command(app: &mut App, trimmed: &str) -> bool {
+    if trimmed == "/logout" {
+        app.push_display_message(DisplayMessage::system(render_logout_usage()));
+        return true;
+    }
+
+    let Some(provider) = trimmed.strip_prefix("/logout ") else {
+        return false;
+    };
+    let provider = provider.trim();
+    if provider.is_empty() {
+        app.push_display_message(DisplayMessage::error(
+            "Usage: `/logout <provider>`".to_string(),
+        ));
+        return true;
+    }
+
+    let providers = logout_provider_descriptors();
+    let Some(provider) = crate::provider_catalog::resolve_login_selection(provider, &providers)
+    else {
+        let valid = providers
+            .iter()
+            .map(|provider| provider.id)
+            .collect::<Vec<_>>()
+            .join(", ");
+        app.push_display_message(DisplayMessage::error(format!(
+            "Unknown provider '{}'. Use: {}",
+            provider, valid
+        )));
+        return true;
+    };
+
+    match logout_provider(provider) {
+        Ok(report) => {
+            crate::auth::AuthStatus::invalidate_cache();
+            app.invalidate_model_picker_cache();
+            app.trigger_provider_auth_changed();
+            app.set_status_notice(format!("Logged out: {}", report.display_name));
+
+            let mut message = format!("**Logged out of {}.**", report.display_name);
+            if !report.removed.is_empty() {
+                message.push_str("\n\nRemoved:\n");
+                for item in report.removed {
+                    message.push_str(&format!("- {}\n", item));
+                }
+            } else {
+                message.push_str("\n\nNo Jcode-owned credentials were found.");
+            }
+            if !report.notes.is_empty() {
+                message.push_str("\nNotes:\n");
+                for note in report.notes {
+                    message.push_str(&format!("- {}\n", note));
+                }
+            }
+            app.push_display_message(DisplayMessage::system(message));
+        }
+        Err(err) => app.push_display_message(DisplayMessage::error(format!(
+            "Failed to logout {}: {}",
+            provider.display_name, err
+        ))),
+    }
+    true
+}
+
+#[derive(Debug)]
+struct LogoutReport {
+    display_name: &'static str,
+    removed: Vec<String>,
+    notes: Vec<String>,
+}
+
+fn logout_provider_descriptors() -> Vec<crate::provider_catalog::LoginProviderDescriptor> {
+    crate::provider_catalog::tui_login_providers()
+        .into_iter()
+        .filter(|provider| {
+            !matches!(
+                provider.target,
+                crate::provider_catalog::LoginProviderTarget::AutoImport
+            )
+        })
+        .collect()
+}
+
+fn render_logout_usage() -> String {
+    let configured = logout_provider_descriptors()
+        .into_iter()
+        .filter(logout_provider_has_jcode_owned_credentials)
+        .map(|provider| format!("`{}`", provider.id))
+        .collect::<Vec<_>>();
+
+    let configured_line = if configured.is_empty() {
+        "No Jcode-owned provider credentials found.".to_string()
+    } else {
+        format!("Configured providers: {}", configured.join(", "))
+    };
+
+    format!(
+        "**Logout**\n\nUsage: `/logout <provider>`\n\n{}\n\nExternal tool logins/imports are left untouched.",
+        configured_line
+    )
+}
+
+fn logout_provider_has_jcode_owned_credentials(
+    provider: &crate::provider_catalog::LoginProviderDescriptor,
+) -> bool {
+    match provider.target {
+        crate::provider_catalog::LoginProviderTarget::AutoImport => false,
+        crate::provider_catalog::LoginProviderTarget::Jcode => env_file_has_key(
+            crate::subscription_catalog::JCODE_API_KEY_ENV,
+            crate::subscription_catalog::JCODE_ENV_FILE,
+        ),
+        crate::provider_catalog::LoginProviderTarget::Claude => {
+            crate::auth::claude::list_accounts()
+                .map(|accounts| !accounts.is_empty())
+                .unwrap_or(false)
+        }
+        crate::provider_catalog::LoginProviderTarget::OpenAi => {
+            crate::auth::codex::list_accounts()
+                .map(|accounts| !accounts.is_empty())
+                .unwrap_or(false)
+                || env_file_has_key("OPENAI_API_KEY", "openai.env")
+        }
+        crate::provider_catalog::LoginProviderTarget::OpenAiApiKey => {
+            env_file_has_key("OPENAI_API_KEY", "openai.env")
+        }
+        crate::provider_catalog::LoginProviderTarget::OpenRouter => {
+            env_file_has_key("OPENROUTER_API_KEY", "openrouter.env")
+        }
+        crate::provider_catalog::LoginProviderTarget::Bedrock => env_file_has_key(
+            crate::provider::bedrock::API_KEY_ENV,
+            crate::provider::bedrock::ENV_FILE,
+        ),
+        crate::provider_catalog::LoginProviderTarget::Azure => {
+            use crate::auth::azure;
+            [
+                azure::ENDPOINT_ENV,
+                azure::API_KEY_ENV,
+                azure::MODEL_ENV,
+                azure::USE_ENTRA_ENV,
+            ]
+            .iter()
+            .any(|key| env_file_has_key(key, azure::ENV_FILE))
+        }
+        crate::provider_catalog::LoginProviderTarget::OpenAiCompatible(profile) => {
+            let resolved = crate::provider_catalog::resolve_openai_compatible_profile(profile);
+            env_file_has_key(&resolved.api_key_env, &resolved.env_file)
+                || env_file_has_key(
+                    crate::provider_catalog::OPENAI_COMPAT_LOCAL_ENABLED_ENV,
+                    &resolved.env_file,
+                )
+        }
+        crate::provider_catalog::LoginProviderTarget::Cursor => {
+            env_file_has_key("CURSOR_API_KEY", "cursor.env")
+        }
+        crate::provider_catalog::LoginProviderTarget::Gemini => crate::auth::gemini::tokens_path()
+            .map(|path| path.exists())
+            .unwrap_or(false),
+        crate::provider_catalog::LoginProviderTarget::Antigravity => {
+            crate::auth::antigravity::tokens_path()
+                .map(|path| path.exists())
+                .unwrap_or(false)
+        }
+        crate::provider_catalog::LoginProviderTarget::Copilot
+        | crate::provider_catalog::LoginProviderTarget::Google => false,
+    }
+}
+
+fn logout_provider(
+    provider: crate::provider_catalog::LoginProviderDescriptor,
+) -> anyhow::Result<LogoutReport> {
+    let mut report = LogoutReport {
+        display_name: provider.display_name,
+        removed: Vec::new(),
+        notes: Vec::new(),
+    };
+
+    match provider.target {
+        crate::provider_catalog::LoginProviderTarget::AutoImport => {
+            report
+                .notes
+                .push("Auto-import has no Jcode-owned credential to remove.".to_string());
+        }
+        crate::provider_catalog::LoginProviderTarget::Jcode => {
+            clear_env_file_key(
+                crate::subscription_catalog::JCODE_API_KEY_ENV,
+                crate::subscription_catalog::JCODE_ENV_FILE,
+                &mut report.removed,
+            )?;
+            clear_env_file_key(
+                crate::subscription_catalog::JCODE_API_BASE_ENV,
+                crate::subscription_catalog::JCODE_ENV_FILE,
+                &mut report.removed,
+            )?;
+        }
+        crate::provider_catalog::LoginProviderTarget::Claude => {
+            for account in crate::auth::claude::list_accounts()? {
+                let label = account.label.clone();
+                crate::auth::claude::remove_account(&label)?;
+                report
+                    .removed
+                    .push(format!("Claude OAuth account `{}`", label));
+            }
+        }
+        crate::provider_catalog::LoginProviderTarget::OpenAi => {
+            for account in crate::auth::codex::list_accounts()? {
+                let label = account.label.clone();
+                crate::auth::codex::remove_account(&label)?;
+                report
+                    .removed
+                    .push(format!("OpenAI OAuth account `{}`", label));
+            }
+            clear_env_file_key("OPENAI_API_KEY", "openai.env", &mut report.removed)?;
+        }
+        crate::provider_catalog::LoginProviderTarget::OpenAiApiKey => {
+            clear_env_file_key("OPENAI_API_KEY", "openai.env", &mut report.removed)?;
+        }
+        crate::provider_catalog::LoginProviderTarget::OpenRouter => {
+            clear_env_file_key("OPENROUTER_API_KEY", "openrouter.env", &mut report.removed)?;
+        }
+        crate::provider_catalog::LoginProviderTarget::Bedrock => {
+            clear_env_file_key(
+                crate::provider::bedrock::API_KEY_ENV,
+                crate::provider::bedrock::ENV_FILE,
+                &mut report.removed,
+            )?;
+            clear_env_file_key(
+                crate::provider::bedrock::REGION_ENV,
+                crate::provider::bedrock::ENV_FILE,
+                &mut report.removed,
+            )?;
+        }
+        crate::provider_catalog::LoginProviderTarget::Azure => {
+            use crate::auth::azure;
+            for key in [
+                azure::ENDPOINT_ENV,
+                azure::API_KEY_ENV,
+                azure::MODEL_ENV,
+                azure::USE_ENTRA_ENV,
+            ] {
+                clear_env_file_key(key, azure::ENV_FILE, &mut report.removed)?;
+            }
+        }
+        crate::provider_catalog::LoginProviderTarget::OpenAiCompatible(profile) => {
+            clear_openai_compatible_login(profile, &mut report.removed)?;
+        }
+        crate::provider_catalog::LoginProviderTarget::Cursor => {
+            clear_env_file_key("CURSOR_API_KEY", "cursor.env", &mut report.removed)?;
+            report.notes.push(
+                "Cursor app auth files are external sources and were left untouched.".to_string(),
+            );
+        }
+        crate::provider_catalog::LoginProviderTarget::Gemini => {
+            remove_file_if_exists(
+                crate::auth::gemini::tokens_path()?,
+                "Gemini OAuth tokens",
+                &mut report.removed,
+            )?;
+        }
+        crate::provider_catalog::LoginProviderTarget::Antigravity => {
+            remove_file_if_exists(
+                crate::auth::antigravity::tokens_path()?,
+                "Antigravity OAuth tokens",
+                &mut report.removed,
+            )?;
+        }
+        crate::provider_catalog::LoginProviderTarget::Copilot => {
+            report.notes.push(
+                "Copilot credentials live in GitHub Copilot external files; left untouched."
+                    .to_string(),
+            );
+        }
+        crate::provider_catalog::LoginProviderTarget::Google => {
+            remove_file_if_exists(
+                crate::auth::google::tokens_path()?,
+                "Google OAuth tokens",
+                &mut report.removed,
+            )?;
+        }
+    }
+
+    Ok(report)
+}
+
+fn clear_openai_compatible_login(
+    profile: crate::provider_catalog::OpenAiCompatibleProfile,
+    removed: &mut Vec<String>,
+) -> anyhow::Result<()> {
+    let resolved = crate::provider_catalog::resolve_openai_compatible_profile(profile);
+    clear_env_file_key(&resolved.api_key_env, &resolved.env_file, removed)?;
+    clear_env_file_key(
+        crate::provider_catalog::OPENAI_COMPAT_LOCAL_ENABLED_ENV,
+        &resolved.env_file,
+        removed,
+    )?;
+
+    if profile.id == crate::provider_catalog::OPENAI_COMPAT_PROFILE.id {
+        for key in [
+            "JCODE_OPENAI_COMPAT_API_BASE",
+            "JCODE_OPENAI_COMPAT_API_KEY_NAME",
+            "JCODE_OPENAI_COMPAT_ENV_FILE",
+            "JCODE_OPENAI_COMPAT_DEFAULT_MODEL",
+        ] {
+            clear_env_file_key(
+                key,
+                crate::provider_catalog::OPENAI_COMPAT_PROFILE.env_file,
+                removed,
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
+fn clear_env_file_key(
+    env_key: &str,
+    file_name: &str,
+    removed: &mut Vec<String>,
+) -> anyhow::Result<()> {
+    let had_runtime = std::env::var(env_key)
+        .ok()
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+    let had_file = env_file_contains_key(env_key, file_name);
+
+    if had_runtime {
+        crate::env::remove_var(env_key);
+        removed.push(format!("runtime `{}`", env_key));
+    }
+    if had_file {
+        crate::provider_catalog::save_env_value_to_env_file(env_key, file_name, None)?;
+        removed.push(format!(
+            "`{}` from `~/.config/jcode/{}`",
+            env_key, file_name
+        ));
+    }
+
+    Ok(())
+}
+
+fn env_file_has_key(env_key: &str, file_name: &str) -> bool {
+    std::env::var(env_key)
+        .ok()
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+        || env_file_contains_key(env_key, file_name)
+}
+
+fn env_file_contains_key(env_key: &str, file_name: &str) -> bool {
+    if !crate::provider_catalog::is_safe_env_key_name(env_key)
+        || !crate::provider_catalog::is_safe_env_file_name(file_name)
+    {
+        return false;
+    }
+
+    let Ok(config_dir) = crate::storage::app_config_dir() else {
+        return false;
+    };
+    let path = config_dir.join(file_name);
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    let prefix = format!("{}=", env_key);
+    content.lines().any(|line| line.starts_with(&prefix))
+}
+
+fn remove_file_if_exists(
+    path: std::path::PathBuf,
+    label: &str,
+    removed: &mut Vec<String>,
+) -> anyhow::Result<()> {
+    if path.exists() {
+        std::fs::remove_file(&path)?;
+        removed.push(format!("{} at `{}`", label, path.display()));
+    }
+    Ok(())
 }
 
 fn parse_account_command(trimmed: &str) -> Option<Result<AccountCommand, String>> {

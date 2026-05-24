@@ -237,6 +237,55 @@ fn openai_compatible_api_key_setup_survives_process_restart_without_relogin() {
 }
 
 #[test]
+fn nine_router_live_catalog_cache_surfaces_in_model_routes() {
+    with_clean_provider_test_env(|| {
+        let profile = crate::provider_catalog::NINE_ROUTER_PROFILE;
+        crate::provider_catalog::save_env_value_to_env_file(
+            crate::provider_catalog::OPENAI_COMPAT_LOCAL_ENABLED_ENV,
+            profile.env_file,
+            Some("1"),
+        )
+        .expect("enable 9Router local endpoint");
+        save_test_openrouter_model_cache(
+            profile.id,
+            profile.api_base,
+            &["glm-via-9router", "qwen-via-9router"],
+        );
+
+        let provider = MultiProvider {
+            claude: RwLock::new(None),
+            anthropic: RwLock::new(None),
+            openai: RwLock::new(None),
+            copilot_api: RwLock::new(None),
+            antigravity: RwLock::new(None),
+            gemini: RwLock::new(None),
+            cursor: RwLock::new(None),
+            bedrock: RwLock::new(None),
+            openrouter: RwLock::new(None),
+            active: RwLock::new(ActiveProvider::OpenAI),
+            use_claude_cli: false,
+            startup_notices: RwLock::new(Vec::new()),
+            forced_provider: None,
+        };
+
+        let routes = provider.model_routes();
+        assert!(routes.iter().any(|route| {
+            route.model == "glm-via-9router"
+                && route.provider == "9Router"
+                && route.api_method == "openai-compatible:9router"
+                && route.available
+                && route.detail == "http://localhost:20128/v1"
+        }));
+        assert!(
+            !routes
+                .iter()
+                .any(|route| route.model == "openrouter models"),
+            "configured 9Router live catalog should suppress OpenRouter placeholder: {routes:?}"
+        );
+    });
+}
+
+#[test]
 fn configured_openai_compatible_profile_routes_use_live_cache_when_not_active_provider() {
     with_clean_provider_test_env(|| {
         crate::provider_catalog::save_env_value_to_env_file(

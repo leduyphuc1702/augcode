@@ -568,6 +568,54 @@ fn test_login_command_opens_inline_login_picker() {
 }
 
 #[test]
+fn test_logout_9router_removes_local_endpoint_credentials() {
+    with_temp_jcode_home(|| {
+        let profile = crate::provider_catalog::NINE_ROUTER_PROFILE;
+        crate::provider_catalog::save_env_value_to_env_file(
+            crate::provider_catalog::OPENAI_COMPAT_LOCAL_ENABLED_ENV,
+            profile.env_file,
+            Some("1"),
+        )
+        .expect("enable 9Router local endpoint");
+        crate::provider_catalog::save_env_value_to_env_file(
+            profile.api_key_env,
+            profile.env_file,
+            Some("test-9router-key"),
+        )
+        .expect("save optional 9Router key");
+
+        assert!(crate::provider_catalog::openai_compatible_profile_is_configured(profile));
+
+        let mut app = create_test_app();
+        app.input = "/logout 9router".to_string();
+        app.submit_input();
+
+        assert!(!crate::provider_catalog::openai_compatible_profile_is_configured(profile));
+        assert!(
+            crate::provider_catalog::load_env_value_from_env_or_config(
+                crate::provider_catalog::OPENAI_COMPAT_LOCAL_ENABLED_ENV,
+                profile.env_file,
+            )
+            .is_none()
+        );
+        assert!(
+            crate::provider_catalog::load_api_key_from_env_or_config(
+                profile.api_key_env,
+                profile.env_file,
+            )
+            .is_none()
+        );
+
+        let msg = app
+            .display_messages()
+            .last()
+            .expect("missing logout message");
+        assert_eq!(msg.role, "system");
+        assert!(msg.content.contains("Logged out of 9Router"));
+    });
+}
+
+#[test]
 fn test_account_openai_compatible_settings_renders_provider_settings() {
     let mut app = create_test_app();
     app.input = "/account openai-compatible settings".to_string();

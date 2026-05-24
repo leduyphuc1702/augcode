@@ -180,6 +180,29 @@ fn test_login_command_suggestions_follow_provider_catalog() {
 }
 
 #[test]
+fn test_logout_command_suggestions_follow_provider_catalog() {
+    let app = create_test_app();
+    let suggestions = app.get_suggestions_for("/logout ");
+
+    for provider in crate::provider_catalog::tui_login_providers() {
+        if matches!(
+            provider.target,
+            crate::provider_catalog::LoginProviderTarget::AutoImport
+        ) {
+            continue;
+        }
+        assert!(
+            suggestions
+                .iter()
+                .any(|(cmd, detail)| cmd == &format!("/logout {}", provider.id)
+                    && detail == &provider.menu_detail),
+            "missing /logout suggestion for provider {}",
+            provider.id
+        );
+    }
+}
+
+#[test]
 fn test_model_autocomplete_completes_unique_match() {
     let mut app = create_test_app();
     configure_test_remote_models(&mut app);

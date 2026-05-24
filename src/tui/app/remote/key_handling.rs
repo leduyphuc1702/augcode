@@ -1120,6 +1120,13 @@ async fn handle_remote_key_internal(
                     return Ok(());
                 }
 
+                if trimmed == "/logout" || trimmed.starts_with("/logout ") {
+                    if crate::tui::app::auth::handle_auth_command(app, trimmed) {
+                        remote.notify_auth_changed_detached();
+                        return Ok(());
+                    }
+                }
+
                 if crate::tui::app::auth::handle_account_command_remote(app, trimmed, remote)
                     .await?
                 {

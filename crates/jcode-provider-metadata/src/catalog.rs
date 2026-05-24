@@ -289,6 +289,17 @@ pub const OLLAMA_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile {
     requires_api_key: false,
 };
 
+pub const NINE_ROUTER_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile {
+    id: "9router",
+    display_name: "9Router",
+    api_base: "http://localhost:20128/v1",
+    api_key_env: "NINE_ROUTER_API_KEY",
+    env_file: "9router.env",
+    setup_url: "https://9router.com/",
+    default_model: None,
+    requires_api_key: false,
+};
+
 pub const CHUTES_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile {
     id: "chutes",
     display_name: "Chutes",
@@ -359,7 +370,7 @@ pub const OPENAI_COMPAT_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfi
     requires_api_key: true,
 };
 
-pub(crate) const OPENAI_COMPAT_PROFILES: [OpenAiCompatibleProfile; 32] = [
+pub(crate) const OPENAI_COMPAT_PROFILES: [OpenAiCompatibleProfile; 33] = [
     OPENCODE_PROFILE,
     OPENCODE_GO_PROFILE,
     ZAI_PROFILE,
@@ -391,6 +402,7 @@ pub(crate) const OPENAI_COMPAT_PROFILES: [OpenAiCompatibleProfile; 32] = [
     XIAOMI_MIMO_PROFILE,
     LMSTUDIO_PROFILE,
     OLLAMA_PROFILE,
+    NINE_ROUTER_PROFILE,
     OPENAI_COMPAT_PROFILE,
 ];
 
@@ -899,6 +911,19 @@ pub const OLLAMA_LOGIN_PROVIDER: LoginProviderDescriptor = LoginProviderDescript
     order: LoginProviderSurfaceOrder::new(Some(35), Some(35), Some(35), Some(35), Some(35)),
 };
 
+pub const NINE_ROUTER_LOGIN_PROVIDER: LoginProviderDescriptor = LoginProviderDescriptor {
+    id: "9router",
+    display_name: "9Router",
+    auth_kind: LoginProviderAuthKind::Local,
+    auth_state_key: LoginProviderAuthStateKey::OpenRouterLike,
+    auth_status_method: "local endpoint",
+    aliases: &["ninerouter"],
+    menu_detail: "local OpenAI-compatible router",
+    recommended: false,
+    target: LoginProviderTarget::OpenAiCompatible(NINE_ROUTER_PROFILE),
+    order: LoginProviderSurfaceOrder::new(Some(36), Some(36), Some(36), Some(36), Some(36)),
+};
+
 pub const OPENAI_COMPAT_LOGIN_PROVIDER: LoginProviderDescriptor = LoginProviderDescriptor {
     id: "openai-compatible",
     display_name: "OpenAI-compatible",
@@ -990,7 +1015,7 @@ pub const GOOGLE_LOGIN_PROVIDER: LoginProviderDescriptor = LoginProviderDescript
     order: LoginProviderSurfaceOrder::new(Some(13), None, None, None, None),
 };
 
-pub(crate) const LOGIN_PROVIDERS: [LoginProviderDescriptor; 45] = [
+pub(crate) const LOGIN_PROVIDERS: [LoginProviderDescriptor; 46] = [
     AUTO_IMPORT_LOGIN_PROVIDER,
     CLAUDE_LOGIN_PROVIDER,
     OPENAI_LOGIN_PROVIDER,
@@ -1030,6 +1055,7 @@ pub(crate) const LOGIN_PROVIDERS: [LoginProviderDescriptor; 45] = [
     XIAOMI_MIMO_LOGIN_PROVIDER,
     LMSTUDIO_LOGIN_PROVIDER,
     OLLAMA_LOGIN_PROVIDER,
+    NINE_ROUTER_LOGIN_PROVIDER,
     OPENAI_COMPAT_LOGIN_PROVIDER,
     CURSOR_LOGIN_PROVIDER,
     COPILOT_LOGIN_PROVIDER,

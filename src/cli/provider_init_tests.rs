@@ -345,6 +345,10 @@ fn choice_for_login_provider_round_trips_openai_compatible_profiles() {
         Some(ProviderChoice::Lmstudio)
     );
     assert_eq!(
+        choice_for_login_provider(provider_catalog::NINE_ROUTER_LOGIN_PROVIDER),
+        Some(ProviderChoice::NineRouter)
+    );
+    assert_eq!(
         choice_for_login_provider(provider_catalog::OPENAI_COMPAT_LOGIN_PROVIDER),
         Some(ProviderChoice::OpenaiCompatible)
     );
