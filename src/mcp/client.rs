@@ -11,6 +11,8 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, mpsc, oneshot};
 
+const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 120;
+
 /// Shared communication handle for an MCP server.
 /// Multiple sessions can hold clones of this and send concurrent requests.
 /// Request/response correlation by ID ensures no interference.
@@ -43,10 +45,13 @@ impl McpHandle {
             .await
             .context("Failed to send request")?;
 
-        let response = tokio::time::timeout(std::time::Duration::from_secs(30), rx)
-            .await
-            .context("Request timeout")?
-            .context("Channel closed")?;
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS),
+            rx,
+        )
+        .await
+        .context("Request timeout")?
+        .context("Channel closed")?;
 
         if let Some(err) = &response.error {
             anyhow::bail!("MCP error {}: {}", err.code, err.message);

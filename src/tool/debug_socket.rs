@@ -15,6 +15,8 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
+const DEFAULT_TIMEOUT_SECS: u64 = 120;
+
 fn next_debug_request_id() -> u64 {
     static NEXT_ID: OnceLock<AtomicU64> = OnceLock::new();
     NEXT_ID
@@ -73,7 +75,7 @@ impl Tool for DebugSocketTool {
 
     async fn execute(&self, input: Value, _ctx: ToolContext) -> Result<ToolOutput> {
         let params: DebugSocketInput = serde_json::from_value(input)?;
-        let timeout_secs = params.timeout_secs.unwrap_or(30);
+        let timeout_secs = params.timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS);
         let session_label = params
             .session_id
             .clone()

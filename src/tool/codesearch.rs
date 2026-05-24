@@ -11,6 +11,7 @@ const DEFAULT_TOKENS: u32 = 5000;
 const MIN_TOKENS: u32 = 1000;
 const MAX_TOKENS: u32 = 50000;
 const MAX_OUTPUT_LEN: usize = 30000;
+const DEFAULT_TIMEOUT_SECS: u64 = 120;
 
 pub struct CodeSearchTool {
     client: reqwest::Client,
@@ -99,7 +100,7 @@ impl Tool for CodeSearchTool {
         let response = self
             .client
             .post(BASE_URL)
-            .timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
             .header("accept", "application/json, text/event-stream")
             .header("content-type", "application/json")
             .json(&body)

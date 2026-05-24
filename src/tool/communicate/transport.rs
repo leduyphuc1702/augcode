@@ -3,6 +3,8 @@ use anyhow::Result;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
+const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 120;
+
 fn request_type_from_json(json: &str) -> String {
     serde_json::from_str::<Value>(json)
         .ok()
@@ -28,8 +30,8 @@ pub(super) async fn send_request_with_timeout(
     let (reader, mut writer) = stream.into_split();
 
     let request_id = request.id();
-    let deadline =
-        tokio::time::Instant::now() + timeout.unwrap_or(std::time::Duration::from_secs(30));
+    let deadline = tokio::time::Instant::now()
+        + timeout.unwrap_or(std::time::Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS));
 
     let json = serde_json::to_string(&request)? + "\n";
     let request_type = request_type_from_json(&json);
