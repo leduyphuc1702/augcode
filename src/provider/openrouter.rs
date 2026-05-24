@@ -625,10 +625,6 @@ pub struct OpenRouterProvider {
 }
 
 impl OpenRouterProvider {
-    fn profile_supports_reasoning_effort(profile_id: Option<&str>) -> bool {
-        matches!(profile_id, Some(id) if id.eq_ignore_ascii_case("deepseek"))
-    }
-
     fn normalize_reasoning_effort(raw: &str) -> Option<String> {
         let value = raw.trim().to_ascii_lowercase();
         if value.is_empty() {
@@ -640,7 +636,7 @@ impl OpenRouterProvider {
             // by snapping to the strongest setting instead of rejecting the command.
             other => {
                 crate::logging::info(&format!(
-                    "Warning: Unsupported DeepSeek reasoning effort '{}'; expected none|low|medium|high|max. Using 'max'.",
+                    "Warning: Unsupported reasoning effort '{}'; expected none|low|medium|high|max. Using 'max'.",
                     other
                 ));
                 Some("max".to_string())

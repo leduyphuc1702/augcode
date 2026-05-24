@@ -696,17 +696,17 @@ fn direct_deepseek_profile_exposes_max_reasoning_effort() {
 }
 
 #[test]
-fn non_deepseek_compatible_profile_does_not_expose_reasoning_effort() {
+fn generic_compatible_profile_exposes_reasoning_effort() {
     let provider = make_custom_compatible_provider();
 
-    assert!(provider.available_efforts().is_empty());
-    let error = provider
-        .set_reasoning_effort("max")
-        .expect_err("generic compatible profile should not expose DeepSeek effort UX");
-    assert!(
-        error.to_string().contains("DeepSeek direct profiles"),
-        "unexpected error: {error:?}"
+    assert_eq!(
+        provider.available_efforts(),
+        vec!["none", "low", "medium", "high", "max"]
     );
+    provider
+        .set_reasoning_effort("max")
+        .expect("generic compatible profile should accept max effort");
+    assert_eq!(provider.reasoning_effort().as_deref(), Some("max"));
 }
 
 #[test]

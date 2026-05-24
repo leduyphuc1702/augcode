@@ -522,7 +522,6 @@ impl Provider for OpenRouterProvider {
         }
 
         if let Some(effort) = reasoning_effort.as_deref()
-            && Self::profile_supports_reasoning_effort(self.profile_id.as_deref())
             && effort != "none"
         {
             request["reasoning_effort"] = serde_json::json!(effort);
@@ -727,9 +726,6 @@ impl Provider for OpenRouterProvider {
     }
 
     fn reasoning_effort(&self) -> Option<String> {
-        if !Self::profile_supports_reasoning_effort(self.profile_id.as_deref()) {
-            return None;
-        }
         self.reasoning_effort
             .try_read()
             .ok()
@@ -737,11 +733,6 @@ impl Provider for OpenRouterProvider {
     }
 
     fn set_reasoning_effort(&self, effort: &str) -> Result<()> {
-        if !Self::profile_supports_reasoning_effort(self.profile_id.as_deref()) {
-            anyhow::bail!(
-                "Reasoning effort is only supported for DeepSeek direct profiles on OpenAI-compatible providers"
-            );
-        }
         let normalized = Self::normalize_reasoning_effort(effort);
         let mut current = self.reasoning_effort.try_write().map_err(|_| {
             anyhow::anyhow!("Cannot change reasoning effort while a request is in progress")
@@ -751,11 +742,7 @@ impl Provider for OpenRouterProvider {
     }
 
     fn available_efforts(&self) -> Vec<&'static str> {
-        if Self::profile_supports_reasoning_effort(self.profile_id.as_deref()) {
-            vec!["none", "low", "medium", "high", "max"]
-        } else {
-            vec![]
-        }
+        vec!["none", "low", "medium", "high", "max"]
     }
 
     fn available_models(&self) -> Vec<&'static str> {
