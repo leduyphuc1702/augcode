@@ -15,6 +15,7 @@ mod comm_control;
 mod comm_plan;
 mod comm_session;
 mod comm_sync;
+mod comm_workflow;
 mod debug;
 mod debug_ambient;
 mod debug_command_exec;

@@ -349,12 +349,13 @@ pub(super) fn handle_run_subagent(
             name: tool_name.clone(),
         });
 
-        let (registry, session_id, working_dir) = {
+        let (registry, session_id, working_dir, agent_role) = {
             let agent_guard = agent.lock().await;
             (
                 agent_guard.registry(),
                 agent_guard.session_id().to_string(),
                 agent_guard.working_dir().map(std::path::PathBuf::from),
+                agent_guard.agent_role(),
             )
         };
 
@@ -364,6 +365,7 @@ pub(super) fn handle_run_subagent(
             tool_call_id: tool_call_id.clone(),
             working_dir,
             allowed_tools: None,
+            agent_role,
             stdin_request_tx: None,
             graceful_shutdown_signal: None,
             execution_mode: crate::tool::ToolExecutionMode::Direct,
@@ -650,13 +652,21 @@ pub(super) async fn handle_trigger_memory_extraction(
                     transcript,
                     agent_guard.session_id().to_string(),
                     agent_guard.working_dir().map(|dir| dir.to_string()),
+                    agent_guard.provider_name(),
+                    agent_guard.provider_model(),
                 ))
             }
         }
     };
 
-    if let Some((transcript, session_id, working_dir)) = extraction {
-        crate::memory_agent::trigger_final_extraction_with_dir(transcript, session_id, working_dir);
+    if let Some((transcript, session_id, working_dir, provider_name, model)) = extraction {
+        crate::memory_agent::trigger_final_extraction_with_provider_model(
+            transcript,
+            session_id,
+            working_dir,
+            provider_name,
+            model,
+        );
     }
 
     let _ = client_event_tx.send(ServerEvent::Done { id });

@@ -171,7 +171,7 @@ pub(super) fn model_entry_saved_spec(entry: &PickerEntry) -> String {
 
 pub(super) fn agent_model_inherit_fallback_label(target: AgentModelTarget) -> &'static str {
     match target {
-        AgentModelTarget::Memory => "sidecar auto-select",
+        AgentModelTarget::Memory => "main model",
         AgentModelTarget::Swarm
         | AgentModelTarget::Review
         | AgentModelTarget::Judge
@@ -194,7 +194,7 @@ pub(super) fn normalize_agent_model_summary(
     match summary.to_ascii_lowercase().as_str() {
         "unknown" | "(unknown)" | "unknown model" => fallback.to_string(),
         "(provider default)" => "provider default".to_string(),
-        "(sidecar auto-select)" => "sidecar auto-select".to_string(),
+        "(sidecar auto-select)" | "sidecar auto-select" => "main model".to_string(),
         _ => summary,
     }
 }

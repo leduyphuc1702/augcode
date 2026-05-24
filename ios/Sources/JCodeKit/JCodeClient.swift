@@ -279,6 +279,7 @@ public actor JCodeClient {
 
         case .ack, .pong, .state, .reloading, .reloadProgress,
              .notification, .swarmStatus, .mcpStatus,
+             .workflowQuestion, .workflowQuestionAnswered,
              .memoryInjected,
              .splitResponse, .compactResult, .stdinRequest, .unknown:
             break

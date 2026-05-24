@@ -22,13 +22,15 @@ use super::comm_control::{
     handle_comm_assign_role, handle_comm_assign_task, handle_comm_task_control,
 };
 use super::comm_plan::{
-    handle_comm_approve_plan, handle_comm_propose_plan, handle_comm_reject_plan,
+    handle_comm_approve_plan, handle_comm_comment_plan, handle_comm_propose_plan,
+    handle_comm_reject_plan,
 };
 use super::comm_session::{handle_comm_spawn, handle_comm_stop};
 use super::comm_sync::{
     CommResyncPlanContext, handle_comm_plan_status, handle_comm_read_context,
     handle_comm_resync_plan, handle_comm_status, handle_comm_summary,
 };
+use super::comm_workflow::{handle_workflow_answer_question, handle_workflow_ask_question};
 use super::provider_control::{
     handle_cycle_model, handle_notify_auth_changed, handle_refresh_models,
     handle_set_compaction_mode, handle_set_model, handle_set_premium_mode,
@@ -375,6 +377,72 @@ async fn handle_lightweight_control_request(
                 event_counter,
                 swarm_event_tx,
                 swarm_mutation_runtime,
+            )
+            .await;
+        }
+        Request::CommCommentPlan {
+            id,
+            session_id: req_session_id,
+            proposer_session,
+            comments,
+        } => {
+            handle_comm_comment_plan(
+                id,
+                req_session_id,
+                proposer_session,
+                comments,
+                &client_event_tx,
+                swarm_members,
+                shared_context,
+                swarm_coordinators,
+                sessions,
+                soft_interrupt_queues,
+                event_history,
+                event_counter,
+                swarm_event_tx,
+                swarm_mutation_runtime,
+            )
+            .await;
+        }
+        Request::WorkflowAskQuestion {
+            id,
+            from_session,
+            to_session,
+            question_id,
+            question,
+            options,
+            allow_freeform,
+        } => {
+            handle_workflow_ask_question(
+                id,
+                from_session,
+                to_session,
+                question_id,
+                question,
+                options,
+                allow_freeform,
+                &client_event_tx,
+                swarm_members,
+                sessions,
+                soft_interrupt_queues,
+            )
+            .await;
+        }
+        Request::WorkflowAnswerQuestion {
+            id,
+            from_session,
+            to_session,
+            answer,
+        } => {
+            handle_workflow_answer_question(
+                id,
+                from_session,
+                to_session,
+                answer,
+                &client_event_tx,
+                swarm_members,
+                sessions,
+                soft_interrupt_queues,
             )
             .await;
         }
@@ -922,7 +990,8 @@ pub(super) async fn handle_client(
     let registry = Registry::new(provider.clone()).await;
     let registry_ms = t0.elapsed().as_millis();
 
-    let mut swarm_enabled = crate::config::config().features.swarm;
+    let features = &crate::config::config().features;
+    let mut swarm_enabled = features.swarm && features.agent_workflow;
     let mut last_available_models_snapshot: Option<String> = None;
     const MAX_LIVE_AVAILABLE_MODELS_UPDATE_BYTES: usize = 64 * 1024;
 
@@ -2278,6 +2347,75 @@ pub(super) async fn handle_client(
                     &event_counter,
                     &swarm_event_tx,
                     &swarm_mutation_runtime,
+                )
+                .await;
+            }
+
+            Request::CommCommentPlan {
+                id,
+                session_id: req_session_id,
+                proposer_session,
+                comments,
+            } => {
+                handle_comm_comment_plan(
+                    id,
+                    req_session_id,
+                    proposer_session,
+                    comments,
+                    &client_event_tx,
+                    &swarm_members,
+                    &shared_context,
+                    &swarm_coordinators,
+                    &sessions,
+                    &soft_interrupt_queues,
+                    &event_history,
+                    &event_counter,
+                    &swarm_event_tx,
+                    &swarm_mutation_runtime,
+                )
+                .await;
+            }
+
+            Request::WorkflowAskQuestion {
+                id,
+                from_session,
+                to_session,
+                question_id,
+                question,
+                options,
+                allow_freeform,
+            } => {
+                handle_workflow_ask_question(
+                    id,
+                    from_session,
+                    to_session,
+                    question_id,
+                    question,
+                    options,
+                    allow_freeform,
+                    &client_event_tx,
+                    &swarm_members,
+                    &sessions,
+                    &soft_interrupt_queues,
+                )
+                .await;
+            }
+
+            Request::WorkflowAnswerQuestion {
+                id,
+                from_session,
+                to_session,
+                answer,
+            } => {
+                handle_workflow_answer_question(
+                    id,
+                    from_session,
+                    to_session,
+                    answer,
+                    &client_event_tx,
+                    &swarm_members,
+                    &sessions,
+                    &soft_interrupt_queues,
                 )
                 .await;
             }

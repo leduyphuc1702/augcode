@@ -1,6 +1,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::agent_workflow::AgentWorkflowState;
+
 use super::{
     EnvSnapshot, SessionImproveMode, SessionStatus, StoredCompactionState, StoredMemoryInjection,
     StoredMessage, StoredReplayEvent,
@@ -20,6 +22,12 @@ pub(super) struct SessionJournalMeta {
     #[serde(default)]
     pub(super) reasoning_effort: Option<String>,
     pub(super) subagent_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) agent_role: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) workflow_task_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) agent_workflow_state: Option<AgentWorkflowState>,
     pub(super) improve_mode: Option<SessionImproveMode>,
     pub(super) autoreview_enabled: Option<bool>,
     pub(super) autojudge_enabled: Option<bool>,

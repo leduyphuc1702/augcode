@@ -4,13 +4,14 @@ use super::{Tool, ToolContext, ToolOutput};
 use crate::plan::PlanItem;
 use crate::protocol::{
     AgentInfo, AgentStatusSnapshot, AwaitedMemberStatus, CommDeliveryMode, ContextEntry,
-    HistoryMessage, PlanGraphStatus, Request, ServerEvent, SwarmChannelInfo, ToolCallSummary,
-    comm_cleanup_candidate_session_ids, default_comm_await_target_statuses,
-    default_comm_cleanup_target_statuses, default_comm_run_await_statuses,
-    format_comm_awaited_members_with_reports, format_comm_channels, format_comm_context_entries,
-    format_comm_context_history, format_comm_members, format_comm_plan_followup,
-    format_comm_plan_status, format_comm_status_snapshot, format_comm_tool_summary,
-    latest_assistant_comm_report, resolve_optional_comm_target_session,
+    HistoryMessage, PlanGraphStatus, PlanProposalComment, QuestionOption, Request, ServerEvent,
+    SwarmChannelInfo, ToolCallSummary, comm_cleanup_candidate_session_ids,
+    default_comm_await_target_statuses, default_comm_cleanup_target_statuses,
+    default_comm_run_await_statuses, format_comm_awaited_members_with_reports,
+    format_comm_channels, format_comm_context_entries, format_comm_context_history,
+    format_comm_members, format_comm_plan_followup, format_comm_plan_status,
+    format_comm_status_snapshot, format_comm_tool_summary, latest_assistant_comm_report,
+    resolve_optional_comm_target_session,
 };
 use anyhow::Result;
 use async_trait::async_trait;
@@ -494,6 +495,14 @@ struct CommunicateInput {
     #[serde(default)]
     plan_items: Option<Vec<PlanItem>>,
     #[serde(default)]
+    plan_comments: Option<Vec<PlanProposalComment>>,
+    #[serde(default)]
+    question_id: Option<String>,
+    #[serde(default)]
+    options: Option<Vec<QuestionOption>>,
+    #[serde(default)]
+    allow_freeform: Option<bool>,
+    #[serde(default)]
     target_status: Option<Vec<String>>,
     #[serde(default)]
     session_ids: Option<Vec<String>>,
@@ -538,137 +547,239 @@ impl Tool for CommunicateTool {
     }
 
     fn parameters_schema(&self) -> Value {
+        let mut properties = serde_json::Map::new();
+        properties.insert("intent".to_string(), super::intent_schema_property());
+        properties.insert(
+            "action".to_string(),
+            json!({
+                "type": "string",
+                "enum": ["share", "share_append", "read", "message", "broadcast", "dm", "channel", "list", "list_channels", "channel_members",
+                         "propose_plan", "approve_plan", "reject_plan", "comment_plan", "ask", "spawn", "stop", "assign_role",
+                         "status", "report", "plan_status", "summary", "read_context", "resync_plan", "assign_task", "assign_next", "fill_slots", "run_plan", "cleanup",
+                         "start", "start_task", "wake", "resume", "retry", "reassign", "replace", "salvage",
+                         "subscribe_channel", "unsubscribe_channel", "await_members"],
+                "description": "Action. For spawn, prefer including prompt with the initial task so the new agent starts useful work immediately."
+            }),
+        );
+        properties.insert("key".to_string(), json!({ "type": "string" }));
+        properties.insert("value".to_string(), json!({ "type": "string" }));
+        properties.insert(
+            "message".to_string(),
+            json!({
+                "type": "string",
+                "description": "Message body. For action=report, this is the completion report body."
+            }),
+        );
+        properties.insert(
+            "status".to_string(),
+            json!({
+                "type": "string",
+                "description": "For action=report: completion status to record, usually ready, blocked, failed, or completed. Defaults to ready."
+            }),
+        );
+        properties.insert(
+            "validation".to_string(),
+            json!({
+                "type": "string",
+                "description": "For action=report: tests or validation performed."
+            }),
+        );
+        properties.insert(
+            "follow_up".to_string(),
+            json!({
+                "type": "string",
+                "description": "For action=report: blockers or follow-up work."
+            }),
+        );
+        properties.insert(
+            "to_session".to_string(),
+            json!({
+                "type": "string",
+                "description": "DM target. Accepts an exact session ID or a unique friendly name within the swarm. If a friendly name is ambiguous, run swarm list and use the exact session ID."
+            }),
+        );
+        properties.insert("channel".to_string(), json!({ "type": "string" }));
+        properties.insert("proposer_session".to_string(), json!({ "type": "string" }));
+        properties.insert("reason".to_string(), json!({ "type": "string" }));
+        properties.insert("target_session".to_string(), json!({ "type": "string" }));
+        properties.insert(
+            "role".to_string(),
+            json!({ "type": "string", "enum": ["agent", "coordinator", "worktree_manager"] }),
+        );
+        properties.insert(
+            "working_dir".to_string(),
+            json!({
+                "type": "string",
+                "description": "Optional working directory for spawn."
+            }),
+        );
+        properties.insert(
+            "prompt".to_string(),
+            json!({
+                "type": "string",
+                "description": "Preferred for spawn. Initial task/instructions for the new agent. Spawning without prompt usually creates an idle agent that needs follow-up assignment."
+            }),
+        );
+        properties.insert(
+            "initial_message".to_string(),
+            json!({
+                "type": "string",
+                "description": "Explicit initial task/instructions for spawn. If both initial_message and prompt are supplied, initial_message wins."
+            }),
+        );
+        properties.insert(
+            "limit".to_string(),
+            json!({
+                "type": "integer",
+                "minimum": 1,
+                "description": "Optional max items for summary-style reads."
+            }),
+        );
+        properties.insert(
+            "task_id".to_string(),
+            json!({
+                "type": "string",
+                "description": "Optional plan task ID. If omitted for assign_task/assign_next, the coordinator picks a runnable task. If omitted for resume/wake/retry/start with target_session, the server resumes the unique assigned task for that session."
+            }),
+        );
+        properties.insert(
+            "spawn_if_needed".to_string(),
+            json!({
+                "type": "boolean",
+                "description": "For assign_task without an explicit target_session: if no reusable agent is available, spawn a fresh agent and retry the assignment automatically."
+            }),
+        );
+        properties.insert(
+            "prefer_spawn".to_string(),
+            json!({
+                "type": "boolean",
+                "description": "For assign_task without an explicit target_session: prefer a fresh spawned agent even if reusable workers are available."
+            }),
+        );
+        properties.insert(
+            "spawn_mode".to_string(),
+            json!({
+                "type": "string",
+                "enum": ["visible", "headless", "auto"],
+                "description": "Per-call spawn mode for swarm-created agents. Overrides agents.swarm_spawn_mode config when set. Defaults to visible/headed behavior."
+            }),
+        );
+        properties.insert(
+            "session_ids".to_string(),
+            json!({ "type": "array", "items": { "type": "string" } }),
+        );
+        properties.insert(
+            "mode".to_string(),
+            json!({
+                "type": "string",
+                "enum": ["all", "any"],
+                "description": "For await_members: wait for all targeted members or wake when any targeted member matches."
+            }),
+        );
+        properties.insert(
+            "target_status".to_string(),
+            json!({
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Optional completion statuses for await_members. Defaults to ready/completed/stopped/failed."
+            }),
+        );
+        properties.insert(
+            "timeout_minutes".to_string(),
+            json!({
+                "type": "integer",
+                "minimum": 1,
+                "description": "Optional timeout for await_members."
+            }),
+        );
+        properties.insert(
+            "concurrency_limit".to_string(),
+            json!({
+                "type": "integer",
+                "minimum": 1,
+                "description": "For fill_slots: desired maximum number of active swarm tasks."
+            }),
+        );
+        properties.insert(
+            "force".to_string(),
+            json!({
+                "type": "boolean",
+                "description": "For stop/cleanup: allow stopping non-owned/user-created swarm sessions. Defaults to false."
+            }),
+        );
+        properties.insert(
+            "retain_agents".to_string(),
+            json!({
+                "type": "boolean",
+                "description": "For run_plan: keep spawned workers after the plan reaches a terminal state. Defaults to false, so owned workers are cleaned up."
+            }),
+        );
+        properties.insert(
+            "wake".to_string(),
+            json!({
+                "type": "boolean",
+                "description": "Optional wake hint for messages."
+            }),
+        );
+        properties.insert(
+            "delivery".to_string(),
+            json!({
+                "type": "string",
+                "enum": ["notify", "interrupt", "wake"],
+                "description": "Optional delivery mode for dm/channel messaging."
+            }),
+        );
+        properties.insert(
+            "plan_items".to_string(),
+            json!({
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                }
+            }),
+        );
+        properties.insert(
+            "plan_comments".to_string(),
+            json!({
+                "type": "array",
+                "description": "For comment_plan: structured comments on a pending plan proposal.",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                }
+            }),
+        );
+        properties.insert(
+            "question_id".to_string(),
+            json!({
+                "type": "string",
+                "description": "For ask: stable question id."
+            }),
+        );
+        properties.insert(
+            "options".to_string(),
+            json!({
+                "type": "array",
+                "description": "For ask: answer buttons shown to the target.",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                }
+            }),
+        );
+        properties.insert(
+            "allow_freeform".to_string(),
+            json!({
+                "type": "boolean",
+                "description": "For ask: allow typed answer in addition to option buttons."
+            }),
+        );
+
         json!({
             "type": "object",
             "required": ["action"],
-            "properties": {
-                "intent": super::intent_schema_property(),
-                "action": {
-                    "type": "string",
-                    "enum": ["share", "share_append", "read", "message", "broadcast", "dm", "channel", "list", "list_channels", "channel_members",
-                             "propose_plan", "approve_plan", "reject_plan", "spawn", "stop", "assign_role",
-                             "status", "report", "plan_status", "summary", "read_context", "resync_plan", "assign_task", "assign_next", "fill_slots", "run_plan", "cleanup",
-                             "start", "start_task", "wake", "resume", "retry", "reassign", "replace", "salvage",
-                             "subscribe_channel", "unsubscribe_channel", "await_members"],
-                    "description": "Action. For spawn, prefer including prompt with the initial task so the new agent starts useful work immediately."
-                },
-                "key": {
-                    "type": "string"
-                },
-                "value": {
-                    "type": "string"
-                },
-                "message": {
-                    "type": "string",
-                    "description": "Message body. For action=report, this is the completion report body."
-                },
-                "status": {
-                    "type": "string",
-                    "description": "For action=report: completion status to record, usually ready, blocked, failed, or completed. Defaults to ready."
-                },
-                "validation": {
-                    "type": "string",
-                    "description": "For action=report: tests or validation performed."
-                },
-                "follow_up": {
-                    "type": "string",
-                    "description": "For action=report: blockers or follow-up work."
-                },
-                "to_session": {
-                    "type": "string",
-                    "description": "DM target. Accepts an exact session ID or a unique friendly name within the swarm. If a friendly name is ambiguous, run swarm list and use the exact session ID."
-                },
-                "channel": { "type": "string" },
-                "proposer_session": { "type": "string" },
-                "reason": { "type": "string" },
-                "target_session": { "type": "string" },
-                "role": {
-                    "type": "string",
-                    "enum": ["agent", "coordinator", "worktree_manager"]
-                },
-                "working_dir": {
-                    "type": "string",
-                    "description": "Optional working directory for spawn."
-                },
-                "prompt": {
-                    "type": "string",
-                    "description": "Preferred for spawn. Initial task/instructions for the new agent. Spawning without prompt usually creates an idle agent that needs follow-up assignment."
-                },
-                "initial_message": {
-                    "type": "string",
-                    "description": "Explicit initial task/instructions for spawn. If both initial_message and prompt are supplied, initial_message wins."
-                },
-                "limit": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "description": "Optional max items for summary-style reads."
-                },
-                "task_id": {
-                    "type": "string",
-                    "description": "Optional plan task ID. If omitted for assign_task/assign_next, the coordinator picks a runnable task. If omitted for resume/wake/retry/start with target_session, the server resumes the unique assigned task for that session."
-                },
-                "spawn_if_needed": {
-                    "type": "boolean",
-                    "description": "For assign_task without an explicit target_session: if no reusable agent is available, spawn a fresh agent and retry the assignment automatically."
-                },
-                "prefer_spawn": {
-                    "type": "boolean",
-                    "description": "For assign_task without an explicit target_session: prefer a fresh spawned agent even if reusable workers are available."
-                },
-                "spawn_mode": {
-                    "type": "string",
-                    "enum": ["visible", "headless", "auto"],
-                    "description": "Per-call spawn mode for swarm-created agents. Overrides agents.swarm_spawn_mode config when set. Defaults to visible/headed behavior."
-                },
-                "session_ids": {
-                    "type": "array",
-                    "items": {"type": "string"}
-                },
-                "mode": {
-                    "type": "string",
-                    "enum": ["all", "any"],
-                    "description": "For await_members: wait for all targeted members or wake when any targeted member matches."
-                },
-                "target_status": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Optional completion statuses for await_members. Defaults to ready/completed/stopped/failed."
-                },
-                "timeout_minutes": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "description": "Optional timeout for await_members."
-                },
-                "concurrency_limit": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "description": "For fill_slots: desired maximum number of active swarm tasks."
-                },
-                "force": {
-                    "type": "boolean",
-                    "description": "For stop/cleanup: allow stopping non-owned/user-created swarm sessions. Defaults to false."
-                },
-                "retain_agents": {
-                    "type": "boolean",
-                    "description": "For run_plan: keep spawned workers after the plan reaches a terminal state. Defaults to false, so owned workers are cleaned up."
-                },
-                "wake": {
-                    "type": "boolean",
-                    "description": "Optional wake hint for messages."
-                },
-                "delivery": {
-                    "type": "string",
-                    "enum": ["notify", "interrupt", "wake"],
-                    "description": "Optional delivery mode for dm/channel messaging."
-                },
-                "plan_items": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "additionalProperties": true
-                    }
-                }
-            }
+            "properties": properties
         })
     }
 
@@ -958,6 +1069,71 @@ impl Tool for CommunicateTool {
                         )))
                     }
                     Err(e) => Err(anyhow::anyhow!("Failed to reject plan: {}", e)),
+                }
+            }
+
+            "comment_plan" => {
+                let proposer = params.proposer_session.ok_or_else(|| {
+                    anyhow::anyhow!("'proposer_session' is required for comment_plan action")
+                })?;
+                let comments = params.plan_comments.ok_or_else(|| {
+                    anyhow::anyhow!("'plan_comments' is required for comment_plan action")
+                })?;
+                if comments.is_empty() {
+                    return Err(anyhow::anyhow!(
+                        "'plan_comments' must include at least one comment"
+                    ));
+                }
+
+                let request = Request::CommCommentPlan {
+                    id: REQUEST_ID,
+                    session_id: ctx.session_id.clone(),
+                    proposer_session: proposer.clone(),
+                    comments,
+                };
+
+                match send_request(request).await {
+                    Ok(response) => {
+                        ensure_success(&response)?;
+                        Ok(ToolOutput::new(format!(
+                            "Sent plan feedback to {}",
+                            proposer
+                        )))
+                    }
+                    Err(e) => Err(anyhow::anyhow!("Failed to comment on plan: {}", e)),
+                }
+            }
+
+            "ask" => {
+                let target = params
+                    .to_session
+                    .ok_or_else(|| anyhow::anyhow!("'to_session' is required for ask action"))?;
+                let question = params
+                    .message
+                    .ok_or_else(|| anyhow::anyhow!("'message' is required for ask action"))?;
+                let question_id = params
+                    .question_id
+                    .unwrap_or_else(|| format!("{}-{}", ctx.session_id, ctx.message_id));
+
+                let request = Request::WorkflowAskQuestion {
+                    id: REQUEST_ID,
+                    from_session: ctx.session_id.clone(),
+                    to_session: target.clone(),
+                    question_id: question_id.clone(),
+                    question,
+                    options: params.options.unwrap_or_default(),
+                    allow_freeform: params.allow_freeform.unwrap_or(false),
+                };
+
+                match send_request(request).await {
+                    Ok(response) => {
+                        ensure_success(&response)?;
+                        Ok(ToolOutput::new(format!(
+                            "Asked structured question '{}' to {}",
+                            question_id, target
+                        )))
+                    }
+                    Err(e) => Err(anyhow::anyhow!("Failed to ask question: {}", e)),
                 }
             }
 
@@ -1505,7 +1681,7 @@ impl Tool for CommunicateTool {
 
             _ => Err(anyhow::anyhow!(
                 "Unknown action '{}'. Valid actions: share, share_append, read, message, broadcast, dm, channel, list, list_channels, channel_members, \
-                 propose_plan, approve_plan, reject_plan, spawn, stop, assign_role, status, plan_status, summary, read_context, \
+                 propose_plan, approve_plan, reject_plan, comment_plan, ask, spawn, stop, assign_role, status, plan_status, summary, read_context, \
                  resync_plan, assign_task, assign_next, fill_slots, run_plan, cleanup, start, start_task, wake, resume, retry, reassign, replace, salvage, subscribe_channel, unsubscribe_channel, await_members",
                 params.action
             )),

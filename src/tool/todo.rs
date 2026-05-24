@@ -104,9 +104,13 @@ impl Tool for TodoTool {
                     )
                     .unwrap_or_else(|_| (*crate::skill::SkillRegistry::shared_snapshot()).clone());
                     let manifests = skills.manifests();
+                    let role = ctx
+                        .agent_role
+                        .clone()
+                        .unwrap_or_else(|| crate::agent_workflow::ROLE_IMPLEMENTER.to_string());
                     let agent = crate::skill_router::AgentProfile::from_allowed_tools(
                         ctx.session_id.clone(),
-                        "implementer",
+                        role,
                         ctx.allowed_tools.as_ref(),
                     );
                     crate::skill_router::annotate_todos(

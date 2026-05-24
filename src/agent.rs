@@ -706,6 +706,10 @@ impl Agent {
         &self.session.id
     }
 
+    pub fn agent_role(&self) -> Option<String> {
+        self.session.agent_role.clone()
+    }
+
     pub(crate) fn set_working_dir_for_pending_context(&mut self, working_dir: Option<String>) {
         if working_dir.is_some() {
             self.session.working_dir = working_dir;

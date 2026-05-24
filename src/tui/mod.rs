@@ -24,6 +24,7 @@ mod ui;
 mod ui_diff;
 pub mod usage_overlay;
 pub mod visual_debug;
+pub(crate) mod workflow_modal;
 pub mod workspace_client;
 pub use jcode_tui_workspace::workspace_map;
 pub use jcode_tui_workspace::workspace_map_widget;
@@ -266,6 +267,10 @@ pub trait TuiState {
     fn inline_interactive_state(&self) -> Option<&InlineInteractiveState>;
     /// Passive inline UI state (informational views shown above input)
     fn inline_view_state(&self) -> Option<&InlineViewState> {
+        None
+    }
+    /// Blocking workflow modal state.
+    fn workflow_modal(&self) -> Option<&workflow_modal::WorkflowModalState> {
         None
     }
     /// General inline UI state shown above input.

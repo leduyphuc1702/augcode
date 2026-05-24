@@ -9,7 +9,7 @@ use super::{
 };
 use crate::agent::Agent;
 use crate::plan::PlanItem;
-use crate::protocol::{NotificationType, ServerEvent};
+use crate::protocol::{NotificationType, PlanProposalComment, ServerEvent};
 use jcode_agent_runtime::SoftInterruptSource;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -579,6 +579,175 @@ pub(super) async fn handle_comm_reject_plan(
         PersistedSwarmMutationResponse::Done,
     )
     .await;
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "plan comments update shared proposal state, notify proposer, and record swarm history"
+)]
+pub(super) async fn handle_comm_comment_plan(
+    id: u64,
+    req_session_id: String,
+    proposer_session: String,
+    comments: Vec<PlanProposalComment>,
+    client_event_tx: &mpsc::UnboundedSender<ServerEvent>,
+    swarm_members: &Arc<RwLock<HashMap<String, SwarmMember>>>,
+    shared_context: &Arc<RwLock<HashMap<String, HashMap<String, SharedContext>>>>,
+    swarm_coordinators: &Arc<RwLock<HashMap<String, String>>>,
+    sessions: &SessionAgents,
+    soft_interrupt_queues: &SessionInterruptQueues,
+    event_history: &Arc<RwLock<std::collections::VecDeque<SwarmEvent>>>,
+    event_counter: &Arc<std::sync::atomic::AtomicU64>,
+    swarm_event_tx: &broadcast::Sender<SwarmEvent>,
+    swarm_mutation_runtime: &SwarmMutationRuntime,
+) {
+    let swarm_id = match require_coordinator_swarm(
+        id,
+        &req_session_id,
+        "Only the coordinator can comment on plan proposals.",
+        client_event_tx,
+        swarm_members,
+        swarm_coordinators,
+    )
+    .await
+    {
+        Some(swarm_id) => swarm_id,
+        None => return,
+    };
+
+    if comments.is_empty() {
+        let _ = client_event_tx.send(ServerEvent::Error {
+            id,
+            message: "Plan comments cannot be empty.".to_string(),
+            retry_after_secs: None,
+        });
+        return;
+    }
+
+    let comments_json = serde_json::to_string(&comments).unwrap_or_default();
+    let mutation_key = request_key(
+        &req_session_id,
+        "comment_plan",
+        &[swarm_id.clone(), proposer_session.clone(), comments_json],
+    );
+    let Some(mutation_state) = begin_or_replay(
+        swarm_mutation_runtime,
+        &mutation_key,
+        "comment_plan",
+        &req_session_id,
+        id,
+        client_event_tx,
+    )
+    .await
+    else {
+        return;
+    };
+
+    let proposal_key = format!("plan_proposal:{proposer_session}");
+    let proposal_exists = {
+        let context = shared_context.read().await;
+        context
+            .get(&swarm_id)
+            .and_then(|swarm_context| swarm_context.get(&proposal_key))
+            .is_some()
+    };
+
+    if !proposal_exists {
+        finish_request(
+            swarm_mutation_runtime,
+            &mutation_state,
+            PersistedSwarmMutationResponse::Error {
+                message: format!("No pending plan proposal from session '{proposer_session}'"),
+                retry_after_secs: None,
+            },
+        )
+        .await;
+        return;
+    }
+
+    {
+        let mut context = shared_context.write().await;
+        if let Some(swarm_context) = context.get_mut(&swarm_id) {
+            swarm_context.remove(&proposal_key);
+        }
+    }
+
+    let coordinator_name = {
+        let members = swarm_members.read().await;
+        members
+            .get(&req_session_id)
+            .and_then(|member| member.friendly_name.clone())
+    };
+    let message = format_plan_comment_feedback(&comments);
+
+    let members = swarm_members.read().await;
+    if let Some(member) = members.get(&proposer_session) {
+        let _ = member.event_tx.send(ServerEvent::Notification {
+            from_session: req_session_id.clone(),
+            from_name: coordinator_name.clone(),
+            notification_type: NotificationType::Message {
+                scope: Some("plan_feedback".to_string()),
+                channel: None,
+            },
+            message: message.clone(),
+        });
+        let _ = queue_soft_interrupt_for_session(
+            &proposer_session,
+            message.clone(),
+            false,
+            SoftInterruptSource::System,
+            soft_interrupt_queues,
+            sessions,
+        )
+        .await;
+    }
+
+    record_swarm_event(
+        event_history,
+        event_counter,
+        swarm_event_tx,
+        req_session_id.clone(),
+        coordinator_name,
+        Some(swarm_id.clone()),
+        SwarmEventType::Notification {
+            notification_type: "plan_feedback".to_string(),
+            message: proposer_session.clone(),
+        },
+    )
+    .await;
+
+    finish_request(
+        swarm_mutation_runtime,
+        &mutation_state,
+        PersistedSwarmMutationResponse::Done,
+    )
+    .await;
+}
+
+fn format_plan_comment_feedback(comments: &[PlanProposalComment]) -> String {
+    let mut message = format!(
+        "The coordinator requested changes on your plan proposal ({} comment{}). Please revise and send a new proposal.",
+        comments.len(),
+        if comments.len() == 1 { "" } else { "s" }
+    );
+    for (idx, comment) in comments.iter().enumerate() {
+        message.push_str(&format!(
+            "\n{}. lines {}-{}: {}",
+            idx + 1,
+            comment.range_start + 1,
+            comment.range_end + 1,
+            comment.text.trim()
+        ));
+        if let Some(quote) = comment
+            .quote
+            .as_deref()
+            .map(str::trim)
+            .filter(|q| !q.is_empty())
+        {
+            message.push_str(&format!("\n   quote: {}", quote));
+        }
+    }
+    message
 }
 
 async fn require_coordinator_swarm(

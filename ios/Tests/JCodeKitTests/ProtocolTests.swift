@@ -213,6 +213,34 @@ do {
         assertEqual(members[0].role, "coordinator")
         assertEqual(members[0].status, "running")
     } else { check(false, "Expected swarmStatus") }
+
+    let question = try decodeEvent("""
+    {"type":"workflow_question","question_id":"q1","from_session":"worker","from_name":"Worker",
+     "question":"Pick scope","options":[{"id":"small","label":"Small","description":"Minimal"}],
+     "allow_freeform":true}
+    """)
+    if case .workflowQuestion(let questionId, let fromSession, let fromName, let body, let options, let allowFreeform) = question {
+        assertEqual(questionId, "q1")
+        assertEqual(fromSession, "worker")
+        assertEqual(fromName, "Worker")
+        assertEqual(body, "Pick scope")
+        assertEqual(options.count, 1)
+        assertEqual(options[0].id, "small")
+        assertEqual(options[0].description, "Minimal")
+        check(allowFreeform, "Expected freeform question")
+    } else { check(false, "Expected workflowQuestion") }
+
+    let answer = try decodeEvent("""
+    {"type":"workflow_question_answered","question_id":"q1","from_session":"coord",
+     "answer":{"question_id":"q1","option_id":"small","answer_text":"Small"}}
+    """)
+    if case .workflowQuestionAnswered(let questionId, let fromSession, let fromName, let payload) = answer {
+        assertEqual(questionId, "q1")
+        assertEqual(fromSession, "coord")
+        assertNil(fromName)
+        assertEqual(payload.optionId, "small")
+        assertEqual(payload.answerText, "Small")
+    } else { check(false, "Expected workflowQuestionAnswered") }
 }
 
 // MARK: - Pairing types

@@ -383,6 +383,38 @@ pub enum Request {
         reason: Option<String>,
     },
 
+    /// Request changes on a plan proposal with structured comments (coordinator only)
+    #[serde(rename = "comm_comment_plan")]
+    CommCommentPlan {
+        id: u64,
+        session_id: String,
+        proposer_session: String,
+        comments: Vec<PlanProposalComment>,
+    },
+
+    /// Ask another workflow participant a structured question.
+    #[serde(rename = "workflow_ask_question")]
+    WorkflowAskQuestion {
+        id: u64,
+        from_session: String,
+        to_session: String,
+        question_id: String,
+        question: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        options: Vec<QuestionOption>,
+        #[serde(default)]
+        allow_freeform: bool,
+    },
+
+    /// Answer a structured workflow question.
+    #[serde(rename = "workflow_answer_question")]
+    WorkflowAnswerQuestion {
+        id: u64,
+        from_session: String,
+        to_session: String,
+        answer: WorkflowQuestionAnswer,
+    },
+
     /// Spawn a new agent session (coordinator only)
     #[serde(rename = "comm_spawn")]
     CommSpawn {
@@ -692,6 +724,30 @@ pub enum ServerEvent {
         items: Vec<PlanItem>,
         summary: String,
         proposal_key: String,
+    },
+
+    /// Structured workflow question delivered to a user/client.
+    #[serde(rename = "workflow_question")]
+    WorkflowQuestion {
+        question_id: String,
+        from_session: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from_name: Option<String>,
+        question: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        options: Vec<QuestionOption>,
+        #[serde(default)]
+        allow_freeform: bool,
+    },
+
+    /// Structured workflow question answer delivered back to the asker.
+    #[serde(rename = "workflow_question_answered")]
+    WorkflowQuestionAnswered {
+        question_id: String,
+        from_session: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from_name: Option<String>,
+        answer: WorkflowQuestionAnswer,
     },
 
     /// Soft interrupt message was injected at a safe point

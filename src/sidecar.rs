@@ -3,9 +3,7 @@
 //! Used for memory relevance verification and other quick tasks that don't
 //! need the full Agent SDK infrastructure.
 //!
-//! Automatically selects the best available backend:
-//! - OpenAI (gpt-5.3-codex-spark) if Codex credentials are available
-//! - Claude (claude-haiku-4-5-20241022) if Claude credentials are available
+//! Uses the active model by default so memory follows the main session route.
 
 use crate::auth;
 use anyhow::{Context, Result};
@@ -43,10 +41,33 @@ const CLAUDE_CODE_JCODE_NOTICE: &str = "You are jcode, powered by Claude Code. Y
 const DEFAULT_MAX_TOKENS: u32 = 1024;
 
 /// Which backend the sidecar is using
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum SidecarBackend {
     OpenAI,
     Claude,
+    OpenAiCompatible(OpenAiCompatibleSidecarConfig),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OpenAiCompatibleSidecarConfig {
+    api_base: String,
+    api_key: Option<String>,
+    auth_header: Option<String>,
+    source: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SidecarSelection {
+    backend: SidecarBackend,
+    model: String,
+    source: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SidecarMainModel {
+    provider: Option<String>,
+    model: String,
+    source: String,
 }
 
 /// Lightweight client for fast sidecar calls
@@ -56,47 +77,45 @@ pub struct Sidecar {
     model: String,
     max_tokens: u32,
     backend: SidecarBackend,
+    source: String,
 }
 
 impl Sidecar {
-    /// Create a new sidecar client, auto-selecting the best available backend.
-    /// Prefers OpenAI (codex-spark) if creds exist, falls back to Claude.
+    /// Create a new sidecar client from the configured main model.
     pub fn new() -> Self {
         let configured_model = crate::config::config().agents.memory_model.clone();
-        Self::with_configured_model(configured_model)
+        Self::with_configured_model_and_main(configured_model, configured_main_model_selection())
     }
 
+    /// Create a sidecar bound to the current session provider/model.
+    pub fn for_provider_model(provider_name: &str, model: &str) -> Self {
+        let configured_model = crate::config::config().agents.memory_model.clone();
+        let model = model.trim();
+        let main_model = (!model.is_empty()).then(|| SidecarMainModel {
+            provider: Some(provider_name.trim().to_string()).filter(|value| !value.is_empty()),
+            model: model.to_string(),
+            source: "current model".to_string(),
+        });
+        Self::with_configured_model_and_main(configured_model, main_model)
+    }
+
+    #[cfg(test)]
     fn with_configured_model(configured_model: Option<String>) -> Self {
-        let (backend, model) = if let Some(model) = configured_model {
-            match crate::provider::provider_for_model(&model) {
-                Some("openai") => (SidecarBackend::OpenAI, model),
-                Some("claude") => (SidecarBackend::Claude, model),
-                _ => {
-                    crate::logging::warn(&format!(
-                        "Ignoring unsupported memory sidecar model override '{}'; expected an OpenAI or Claude model",
-                        model
-                    ));
-                    if auth::codex::load_credentials().is_ok() {
-                        (SidecarBackend::OpenAI, SIDECAR_OPENAI_MODEL.to_string())
-                    } else {
-                        (SidecarBackend::Claude, SIDECAR_CLAUDE_MODEL.to_string())
-                    }
-                }
-            }
-        } else if auth::codex::load_credentials().is_ok() {
-            (SidecarBackend::OpenAI, SIDECAR_OPENAI_MODEL.to_string())
-        } else if auth::claude::load_credentials().is_ok() {
-            (SidecarBackend::Claude, SIDECAR_CLAUDE_MODEL.to_string())
-        } else {
-            // Default to Claude - will fail on use with a clear error
-            (SidecarBackend::Claude, SIDECAR_CLAUDE_MODEL.to_string())
-        };
+        Self::with_configured_model_and_main(configured_model, None)
+    }
+
+    fn with_configured_model_and_main(
+        configured_model: Option<String>,
+        main_model: Option<SidecarMainModel>,
+    ) -> Self {
+        let selection = resolve_sidecar_selection(configured_model, main_model);
 
         Self {
             client: crate::provider::shared_http_client(),
-            model,
+            model: selection.model,
             max_tokens: DEFAULT_MAX_TOKENS,
-            backend,
+            backend: selection.backend,
+            source: selection.source,
         }
     }
 
@@ -107,18 +126,36 @@ impl Sidecar {
 
     /// Return the currently selected backend label.
     pub fn backend_name(&self) -> &'static str {
-        match self.backend {
+        match &self.backend {
             SidecarBackend::OpenAI => "openai",
             SidecarBackend::Claude => "claude",
+            SidecarBackend::OpenAiCompatible(_) => "openai-compatible",
         }
+    }
+
+    pub fn selection_source(&self) -> &str {
+        &self.source
+    }
+
+    pub fn display_label(&self) -> String {
+        format!(
+            "{} · {} · {}",
+            self.backend_name(),
+            self.model_name(),
+            self.selection_source()
+        )
     }
 
     /// Simple completion - send a prompt, get a response.
     /// Routes to the correct API based on the detected backend.
     pub async fn complete(&self, system: &str, user_message: &str) -> Result<String> {
-        match self.backend {
+        match &self.backend {
             SidecarBackend::OpenAI => self.complete_openai(system, user_message).await,
             SidecarBackend::Claude => self.complete_claude(system, user_message).await,
+            SidecarBackend::OpenAiCompatible(config) => {
+                self.complete_openai_compatible(config, system, user_message)
+                    .await
+            }
         }
     }
 
@@ -323,6 +360,62 @@ impl Sidecar {
         Ok(text)
     }
 
+    async fn complete_openai_compatible(
+        &self,
+        config: &OpenAiCompatibleSidecarConfig,
+        system: &str,
+        user_message: &str,
+    ) -> Result<String> {
+        let url = format!("{}/chat/completions", config.api_base.trim_end_matches('/'));
+        let request = serde_json::json!({
+            "model": self.model.as_str(),
+            "stream": false,
+            "max_tokens": self.max_tokens,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_message}
+            ]
+        });
+
+        let mut builder = self
+            .client
+            .post(&url)
+            .header("Content-Type", "application/json");
+        if let Some(key) = config.api_key.as_deref() {
+            if let Some(header) = config.auth_header.as_deref() {
+                builder = builder.header(header, key);
+            } else {
+                builder = builder.bearer_auth(key);
+            }
+        }
+
+        let response = builder.json(&request).send().await.with_context(|| {
+            format!("Failed to send OpenAI-compatible sidecar request to {url}")
+        })?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!(
+                "OpenAI-compatible sidecar error ({}) from {}: {}",
+                status,
+                config.source,
+                body
+            );
+        }
+
+        let result: serde_json::Value = response
+            .json()
+            .await
+            .context("Failed to parse OpenAI-compatible sidecar response")?;
+        result["choices"]
+            .as_array()
+            .and_then(|choices| choices.first())
+            .and_then(|choice| choice["message"]["content"].as_str())
+            .map(ToString::to_string)
+            .filter(|text| !text.trim().is_empty())
+            .ok_or_else(|| anyhow::anyhow!("OpenAI-compatible sidecar response had no text"))
+    }
+
     /// Check if a memory is relevant to the current context
     /// Returns (is_relevant, explanation)
     pub async fn check_relevance(
@@ -465,6 +558,419 @@ impl Default for Sidecar {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn resolve_sidecar_selection(
+    configured_model: Option<String>,
+    main_model: Option<SidecarMainModel>,
+) -> SidecarSelection {
+    if let Some(model) = configured_model
+        .as_deref()
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+    {
+        if let Some(selection) = resolve_explicit_sidecar_model(model) {
+            return selection;
+        }
+        crate::logging::warn(&format!(
+            "Ignoring unsupported memory sidecar model override '{}'; expected OpenAI, Claude, or OpenAI-compatible profile:model",
+            model
+        ));
+    }
+
+    if let Some(main_model) = main_model.as_ref()
+        && let Some(selection) = resolve_main_model_selection(main_model)
+    {
+        return selection;
+    }
+
+    if auth::claude::load_credentials().is_ok() {
+        return SidecarSelection {
+            backend: SidecarBackend::Claude,
+            model: SIDECAR_CLAUDE_MODEL.to_string(),
+            source: "claude credentials".to_string(),
+        };
+    }
+
+    if auth::codex::load_credentials().is_ok() {
+        return SidecarSelection {
+            backend: SidecarBackend::OpenAI,
+            model: SIDECAR_OPENAI_MODEL.to_string(),
+            source: "openai fallback".to_string(),
+        };
+    }
+
+    SidecarSelection {
+        backend: SidecarBackend::Claude,
+        model: SIDECAR_CLAUDE_MODEL.to_string(),
+        source: "claude fallback".to_string(),
+    }
+}
+
+fn configured_main_model_selection() -> Option<SidecarMainModel> {
+    let cfg = crate::config::config();
+    let provider = cfg
+        .provider
+        .default_provider
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    let model = cfg
+        .provider
+        .default_model
+        .clone()
+        .or_else(|| {
+            provider.as_deref().and_then(|provider| {
+                cfg.providers
+                    .iter()
+                    .find(|(name, _)| name.eq_ignore_ascii_case(provider))
+                    .and_then(|(_, profile)| profile.default_model.clone())
+            })
+        })
+        .or_else(|| {
+            provider.as_deref().and_then(|provider| {
+                crate::provider_catalog::openai_compatible_profile_by_id(provider)
+                    .map(crate::provider_catalog::resolve_openai_compatible_profile)
+                    .and_then(|profile| profile.default_model)
+            })
+        })
+        .or_else(|| {
+            local_openai_compatible_default_profile().and_then(|profile| profile.default_model)
+        })?;
+    let model = model.trim().to_string();
+    if model.is_empty() {
+        return None;
+    }
+    Some(SidecarMainModel {
+        provider,
+        model,
+        source: "configured main model".to_string(),
+    })
+}
+
+fn resolve_main_model_selection(main: &SidecarMainModel) -> Option<SidecarSelection> {
+    let model = main.model.trim();
+    if model.is_empty() {
+        return None;
+    }
+
+    if let Some(provider) = main.provider.as_deref()
+        && let Some(selection) = selection_from_provider_profile_hint(provider, model, &main.source)
+    {
+        return Some(selection);
+    }
+
+    match crate::provider::provider_for_model_with_hint(model, main.provider.as_deref()) {
+        Some("openai") => Some(SidecarSelection {
+            backend: SidecarBackend::OpenAI,
+            model: model.to_string(),
+            source: main.source.clone(),
+        }),
+        Some("claude") | Some("anthropic") => Some(SidecarSelection {
+            backend: SidecarBackend::Claude,
+            model: model.to_string(),
+            source: main.source.clone(),
+        }),
+        Some("openrouter") => resolve_current_openai_compatible_for_model(
+            model,
+            main.provider.as_deref(),
+            &main.source,
+        ),
+        _ => resolve_current_openai_compatible_for_model(
+            model,
+            main.provider.as_deref(),
+            &main.source,
+        ),
+    }
+}
+
+fn resolve_explicit_sidecar_model(model: &str) -> Option<SidecarSelection> {
+    match crate::provider::provider_for_model(model) {
+        Some("openai") => {
+            return Some(SidecarSelection {
+                backend: SidecarBackend::OpenAI,
+                model: model.to_string(),
+                source: "agents.memory_model".to_string(),
+            });
+        }
+        Some("claude") => {
+            return Some(SidecarSelection {
+                backend: SidecarBackend::Claude,
+                model: model.to_string(),
+                source: "agents.memory_model".to_string(),
+            });
+        }
+        _ => {}
+    }
+
+    if let Some(selection) =
+        openai_compatible_selection_from_model_spec(model, true, "agents.memory_model".to_string())
+    {
+        return Some(selection);
+    }
+
+    local_openai_compatible_default_profile()
+        .and_then(|profile| selection_from_resolved_profile(&profile, model, "agents.memory_model"))
+}
+
+fn resolve_current_openai_compatible_for_model(
+    model: &str,
+    provider_hint: Option<&str>,
+    source: &str,
+) -> Option<SidecarSelection> {
+    let cfg = crate::config::config();
+    let mut hints = Vec::new();
+    if let Some(provider_hint) = provider_hint {
+        hints.push(provider_hint.to_string());
+    }
+    for key in [
+        "JCODE_NAMED_PROVIDER_PROFILE",
+        "JCODE_PROVIDER_PROFILE_NAME",
+        "JCODE_OPENROUTER_CACHE_NAMESPACE",
+    ] {
+        if let Ok(value) = std::env::var(key) {
+            hints.push(value);
+        }
+    }
+    if let Some(default_provider) = cfg.provider.default_provider.as_ref() {
+        hints.push(default_provider.clone());
+    }
+
+    for hint in hints {
+        let hint = hint.trim();
+        if hint.is_empty() {
+            continue;
+        }
+        if let Some(selection) = selection_from_provider_profile_hint(hint, model, source) {
+            return Some(selection);
+        }
+    }
+
+    selection_from_openrouter_env(model, source).or_else(|| {
+        local_openai_compatible_default_profile()
+            .and_then(|profile| selection_from_resolved_profile(&profile, model, source))
+    })
+}
+
+fn selection_from_provider_profile_hint(
+    provider_hint: &str,
+    model: &str,
+    source: &str,
+) -> Option<SidecarSelection> {
+    let provider_hint = provider_hint.trim();
+    if provider_hint.is_empty() {
+        return None;
+    }
+
+    let cfg = crate::config::config();
+    if let Some((profile_name, profile)) = cfg
+        .providers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(provider_hint))
+    {
+        return selection_from_named_profile(profile_name, profile, model, source);
+    }
+
+    if let Some(profile) = crate::provider_catalog::openai_compatible_profile_by_id(provider_hint)
+        .map(crate::provider_catalog::resolve_openai_compatible_profile)
+    {
+        return selection_from_resolved_profile(&profile, model, source);
+    }
+
+    if let Some(profile_id) =
+        crate::provider_catalog::openai_compatible_profile_id_for_display_name(provider_hint)
+        && let Some(profile) = crate::provider_catalog::openai_compatible_profile_by_id(profile_id)
+            .map(crate::provider_catalog::resolve_openai_compatible_profile)
+    {
+        return selection_from_resolved_profile(&profile, model, source);
+    }
+
+    None
+}
+
+fn selection_from_openrouter_env(model: &str, source: &str) -> Option<SidecarSelection> {
+    let api_base = std::env::var("JCODE_OPENROUTER_API_BASE").ok()?;
+    let api_base = crate::provider_catalog::normalize_api_base(&api_base)?;
+    let allow_no_auth = std::env::var("JCODE_OPENROUTER_ALLOW_NO_AUTH")
+        .ok()
+        .and_then(|value| parse_sidecar_env_bool(&value))
+        .unwrap_or_else(|| crate::provider_catalog::api_base_uses_localhost(&api_base));
+    let key_name = std::env::var("JCODE_OPENROUTER_API_KEY_NAME")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "OPENROUTER_API_KEY".to_string());
+    let env_file = std::env::var("JCODE_OPENROUTER_ENV_FILE")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "openrouter.env".to_string());
+    let api_key = crate::provider_catalog::load_api_key_from_env_or_config(&key_name, &env_file);
+    if api_key.is_none() && !allow_no_auth {
+        return None;
+    }
+    let auth_header = match std::env::var("JCODE_OPENROUTER_AUTH_HEADER")
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("api-key") | Some("header") => Some(
+            std::env::var("JCODE_OPENROUTER_AUTH_HEADER_NAME")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| "api-key".to_string()),
+        ),
+        _ => None,
+    };
+    Some(SidecarSelection {
+        backend: SidecarBackend::OpenAiCompatible(OpenAiCompatibleSidecarConfig {
+            api_base,
+            api_key,
+            auth_header,
+            source: crate::provider_catalog::active_openai_compatible_display_name()
+                .unwrap_or_else(|| "OpenAI-compatible".to_string()),
+        }),
+        model: model.trim().to_string(),
+        source: source.to_string(),
+    })
+}
+
+fn parse_sidecar_env_bool(raw: &str) -> Option<bool> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+fn openai_compatible_selection_from_model_spec(
+    model_spec: &str,
+    allow_remote: bool,
+    source: String,
+) -> Option<SidecarSelection> {
+    let (profile_id, model) = model_spec.split_once(':')?;
+    let model = model.trim();
+    if model.is_empty() {
+        return None;
+    }
+
+    if profile_id == "openai-compatible" {
+        let profile = crate::provider_catalog::resolve_openai_compatible_profile(
+            crate::provider_catalog::OPENAI_COMPAT_PROFILE,
+        );
+        if allow_remote || crate::provider_catalog::api_base_uses_localhost(&profile.api_base) {
+            return selection_from_resolved_profile(&profile, model, &source);
+        }
+    }
+
+    if let Some(profile) = crate::provider_catalog::openai_compatible_profile_by_id(profile_id)
+        .map(crate::provider_catalog::resolve_openai_compatible_profile)
+        && (allow_remote || crate::provider_catalog::api_base_uses_localhost(&profile.api_base))
+    {
+        return selection_from_resolved_profile(&profile, model, &source);
+    }
+
+    let cfg = crate::config::config();
+    cfg.providers
+        .get(profile_id)
+        .and_then(|profile| selection_from_named_profile(profile_id, profile, model, &source))
+}
+
+fn local_openai_compatible_default_profile()
+-> Option<crate::provider_catalog::ResolvedOpenAiCompatibleProfile> {
+    let profile = crate::provider_catalog::resolve_openai_compatible_profile(
+        crate::provider_catalog::OPENAI_COMPAT_PROFILE,
+    );
+    if crate::provider_catalog::openai_compatible_profile_is_configured(
+        crate::provider_catalog::OPENAI_COMPAT_PROFILE,
+    ) {
+        Some(profile)
+    } else {
+        None
+    }
+}
+
+fn selection_from_resolved_profile(
+    profile: &crate::provider_catalog::ResolvedOpenAiCompatibleProfile,
+    model: &str,
+    source: &str,
+) -> Option<SidecarSelection> {
+    let model = model.trim();
+    if model.is_empty() {
+        return None;
+    }
+    let api_key = crate::provider_catalog::load_api_key_from_env_or_config(
+        &profile.api_key_env,
+        &profile.env_file,
+    );
+    if api_key.is_none() && profile.requires_api_key {
+        return None;
+    }
+    Some(SidecarSelection {
+        backend: SidecarBackend::OpenAiCompatible(OpenAiCompatibleSidecarConfig {
+            api_base: profile.api_base.clone(),
+            api_key,
+            auth_header: None,
+            source: profile.display_name.clone(),
+        }),
+        model: model.to_string(),
+        source: source.to_string(),
+    })
+}
+
+fn selection_from_named_profile(
+    profile_name: &str,
+    profile: &crate::config::NamedProviderConfig,
+    model: &str,
+    source: &str,
+) -> Option<SidecarSelection> {
+    if !matches!(
+        profile.provider_type,
+        crate::config::NamedProviderType::OpenAiCompatible
+    ) {
+        return None;
+    }
+    let model = model.trim();
+    if model.is_empty() {
+        return None;
+    }
+    let api_base = crate::provider_catalog::normalize_api_base(&profile.base_url)?;
+    let requires_key = profile
+        .requires_api_key
+        .unwrap_or(!crate::provider_catalog::api_base_uses_localhost(&api_base));
+    let api_key = profile
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .map(ToString::to_string)
+        .or_else(|| {
+            let key_env = profile.api_key_env.as_deref()?;
+            let env_file = profile.env_file.as_deref().unwrap_or(".env");
+            crate::provider_catalog::load_api_key_from_env_or_config(key_env, env_file)
+        });
+    if api_key.is_none()
+        && requires_key
+        && !matches!(profile.auth, crate::config::NamedProviderAuth::None)
+    {
+        return None;
+    }
+    let auth_header = match profile.auth {
+        crate::config::NamedProviderAuth::Header => profile
+            .auth_header
+            .clone()
+            .or_else(|| Some("api-key".to_string())),
+        crate::config::NamedProviderAuth::Bearer | crate::config::NamedProviderAuth::None => None,
+    };
+    Some(SidecarSelection {
+        backend: SidecarBackend::OpenAiCompatible(OpenAiCompatibleSidecarConfig {
+            api_base,
+            api_key,
+            auth_header,
+            source: profile_name.to_string(),
+        }),
+        model: model.to_string(),
+        source: source.to_string(),
+    })
 }
 
 /// The public model constant for backward compatibility in tests.
@@ -790,12 +1296,15 @@ mod tests {
     }
 
     #[test]
-    fn test_backend_selection_prefers_openai() {
+    fn test_backend_selection_prefers_claude_before_openai_fallback() {
         // Make backend selection deterministic by isolating credentials.
         let _guard = crate::storage::lock_test_env();
         let temp = tempfile::TempDir::new().expect("create temp jcode home");
         let _home = EnvVarGuard::set_path("JCODE_HOME", temp.path());
         let _openai = EnvVarGuard::unset("OPENAI_API_KEY");
+        let _compat_base = EnvVarGuard::unset("JCODE_OPENAI_COMPAT_API_BASE");
+        let _compat_model = EnvVarGuard::unset("JCODE_OPENAI_COMPAT_DEFAULT_MODEL");
+        let _router_model = EnvVarGuard::unset("JCODE_OPENROUTER_MODEL");
 
         codex::upsert_account_from_tokens("openai-1", "sk-test-key-123", "", None, None)
             .expect("write OpenAI test auth");
@@ -811,10 +1320,65 @@ mod tests {
         .expect("write Claude test auth");
 
         let sidecar = Sidecar::with_configured_model(None);
-        assert_eq!(sidecar.backend, SidecarBackend::OpenAI);
-        assert_eq!(sidecar.model, SIDECAR_OPENAI_MODEL);
+        assert_eq!(sidecar.backend, SidecarBackend::Claude);
+        assert_eq!(sidecar.model, SIDECAR_CLAUDE_MODEL);
         codex::set_active_account_override(None);
         crate::auth::claude::set_active_account_override(None);
+    }
+
+    #[test]
+    fn test_current_openrouter_model_uses_runtime_model() {
+        let _guard = crate::storage::lock_test_env();
+        let temp = tempfile::TempDir::new().expect("create temp jcode home");
+        let _home = EnvVarGuard::set_path("JCODE_HOME", temp.path());
+        let _base = EnvVarGuard::unset("JCODE_OPENROUTER_API_BASE");
+        let _allow = EnvVarGuard::unset("JCODE_OPENROUTER_ALLOW_NO_AUTH");
+        let _namespace = EnvVarGuard::unset("JCODE_OPENROUTER_CACHE_NAMESPACE");
+        let _named = EnvVarGuard::unset("JCODE_NAMED_PROVIDER_PROFILE");
+        crate::env::set_var("JCODE_OPENROUTER_API_BASE", "http://localhost:1234/v1");
+        crate::env::set_var("JCODE_OPENROUTER_ALLOW_NO_AUTH", "1");
+
+        let sidecar = Sidecar::for_provider_model("OpenRouter", "cx/gpt-5.5");
+        assert!(matches!(
+            sidecar.backend,
+            SidecarBackend::OpenAiCompatible(_)
+        ));
+        assert_eq!(sidecar.model, "cx/gpt-5.5");
+        assert_eq!(sidecar.source, "current model");
+    }
+
+    #[test]
+    fn test_current_main_model_wins_over_local_default() {
+        let _guard = crate::storage::lock_test_env();
+        let temp = tempfile::TempDir::new().expect("create temp jcode home");
+        let _home = EnvVarGuard::set_path("JCODE_HOME", temp.path());
+        let _compat_base = EnvVarGuard::unset("JCODE_OPENAI_COMPAT_API_BASE");
+        let _compat_model = EnvVarGuard::unset("JCODE_OPENAI_COMPAT_DEFAULT_MODEL");
+        crate::env::set_var("JCODE_OPENAI_COMPAT_API_BASE", "http://localhost:1234/v1");
+        crate::env::set_var("JCODE_OPENAI_COMPAT_DEFAULT_MODEL", "local-model");
+
+        let sidecar = Sidecar::for_provider_model("OpenAI", "gpt-5.5");
+        assert_eq!(sidecar.backend, SidecarBackend::OpenAI);
+        assert_eq!(sidecar.model, "gpt-5.5");
+        assert_eq!(sidecar.source, "current model");
+    }
+
+    #[test]
+    fn test_explicit_openai_compatible_memory_model_is_accepted() {
+        let _guard = crate::storage::lock_test_env();
+        let temp = tempfile::TempDir::new().expect("create temp jcode home");
+        let _home = EnvVarGuard::set_path("JCODE_HOME", temp.path());
+        let _base = EnvVarGuard::unset("JCODE_OPENAI_COMPAT_API_BASE");
+        crate::env::set_var("JCODE_OPENAI_COMPAT_API_BASE", "http://localhost:1234/v1");
+
+        let sidecar =
+            Sidecar::with_configured_model(Some("openai-compatible:local-model".to_string()));
+        assert!(matches!(
+            sidecar.backend,
+            SidecarBackend::OpenAiCompatible(_)
+        ));
+        assert_eq!(sidecar.model, "local-model");
+        assert_eq!(sidecar.source, "agents.memory_model");
     }
 
     #[test]

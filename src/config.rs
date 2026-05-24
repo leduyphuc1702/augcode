@@ -9,7 +9,8 @@ pub use jcode_config_types::{
     DiffDisplayMode, DisplayConfig, FeatureConfig, GatewayConfig, KeybindingsConfig,
     MarkdownSpacingMode, NamedProviderAuth, NamedProviderConfig, NamedProviderModelConfig,
     NamedProviderType, NativeScrollbarConfig, ProviderConfig, SafetyConfig,
-    SessionPickerResumeAction, SwarmSpawnMode, UpdateChannel, WebSearchConfig, WebSearchEngine,
+    SessionPickerResumeAction, SkillsConfig, SwarmSpawnMode, UpdateChannel, WebSearchConfig,
+    WebSearchEngine, WorkflowConfig,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -80,6 +81,7 @@ const CONFIG_ENV_KEYS: &[&str] = &[
     "JCODE_NTFY_SERVER",
     "JCODE_NTFY_TOPIC",
     "JCODE_PER_AGENT_SKILL_ROUTER_ENABLED",
+    "JCODE_AGENT_WORKFLOW_ENABLED",
     "JCODE_OPENAI_NATIVE_COMPACTION_MODE",
     "JCODE_OPENAI_NATIVE_COMPACTION_THRESHOLD_TOKENS",
     "JCODE_OPENAI_REASONING_EFFORT",
@@ -103,6 +105,9 @@ const CONFIG_ENV_KEYS: &[&str] = &[
     "JCODE_SCROLL_UP_KEY",
     "JCODE_SHOW_DIFFS",
     "JCODE_SHOW_THINKING",
+    "JCODE_SKILLS_ALLOW_CUSTOM_LOCAL",
+    "JCODE_SKILLS_REMOTE_READ_POLICY",
+    "JCODE_SKILLS_MARKETPLACE_MIN_TIER",
     "JCODE_SIDE_PANEL_NATIVE_SCROLLBAR",
     "JCODE_SMTP_PASSWORD",
     "JCODE_SWARM_ENABLED",
@@ -117,6 +122,8 @@ const CONFIG_ENV_KEYS: &[&str] = &[
     "JCODE_WORKSPACE_LEFT_KEY",
     "JCODE_WORKSPACE_RIGHT_KEY",
     "JCODE_WORKSPACE_UP_KEY",
+    "JCODE_WORKFLOW_CONTEXT_SOFT_PCT",
+    "JCODE_WORKFLOW_CONTEXT_HARD_PCT",
     "XDG_CONFIG_HOME",
 ];
 
@@ -354,6 +361,12 @@ pub struct Config {
 
     /// Agent-specific model defaults
     pub agents: AgentsConfig,
+
+    /// Skill routing/install policy
+    pub skills: SkillsConfig,
+
+    /// Agent workflow policy
+    pub workflow: WorkflowConfig,
 
     /// Ambient mode configuration
     pub ambient: AmbientConfig,

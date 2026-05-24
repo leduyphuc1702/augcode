@@ -9,6 +9,7 @@ use crate::bus::BusEvent;
 use crate::message::ToolCall;
 use crate::protocol::{ServerEvent, TranscriptMode};
 use crate::tui::backend::{RemoteConnection, RemoteDisconnectReason, RemoteEventState, RemoteRead};
+use crate::tui::workflow_modal::WorkflowPendingAction;
 use anyhow::Result;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent};
 use ratatui::{DefaultTerminal, Terminal, backend::Backend};
@@ -72,11 +73,13 @@ pub(super) async fn handle_tick(app: &mut App, remote: &mut RemoteConnection) ->
     }
 
     needs_redraw |= app.refresh_todos_view_if_needed();
+    needs_redraw |= app.refresh_context_view_if_needed();
     needs_redraw |= app.refresh_side_panel_linked_content_if_due();
     needs_redraw |= app.poll_model_picker_load();
     needs_redraw |= app.poll_session_picker_load();
 
     let _ = check_debug_command(app, remote).await;
+    needs_redraw |= dispatch_workflow_action(app, remote).await;
 
     if !app.is_processing {
         if let Some(request) = app.take_pending_catchup_resume() {
@@ -234,6 +237,55 @@ pub(super) async fn handle_tick(app: &mut App, remote: &mut RemoteConnection) ->
 
     detect_and_cancel_stall(app, remote).await;
     needs_redraw
+}
+
+async fn dispatch_workflow_action(app: &mut App, remote: &mut RemoteConnection) -> bool {
+    let Some(action) = app.take_pending_workflow_action() else {
+        return false;
+    };
+    let session_id = app
+        .active_client_session_id()
+        .unwrap_or(app.session.id.as_str())
+        .to_string();
+    let result = match action {
+        WorkflowPendingAction::Close => Ok(()),
+        WorkflowPendingAction::ApprovePlan { proposer_session } => {
+            remote.approve_plan(session_id, proposer_session).await
+        }
+        WorkflowPendingAction::RejectPlan {
+            proposer_session,
+            reason,
+        } => {
+            remote
+                .reject_plan(session_id, proposer_session, reason)
+                .await
+        }
+        WorkflowPendingAction::CommentPlan {
+            proposer_session,
+            comments,
+        } => {
+            remote
+                .comment_plan(session_id, proposer_session, comments)
+                .await
+        }
+        WorkflowPendingAction::AnswerQuestion { to_session, answer } => {
+            remote
+                .answer_workflow_question(session_id, to_session, answer)
+                .await
+        }
+    };
+
+    match result {
+        Ok(()) => app.set_status_notice("Workflow action sent"),
+        Err(error) => {
+            app.push_display_message(DisplayMessage::error(format!(
+                "Failed to send workflow action: {}",
+                error
+            )));
+            app.set_status_notice("Workflow action failed");
+        }
+    }
+    true
 }
 
 pub(super) async fn handle_terminal_event(
@@ -428,6 +480,14 @@ pub(super) async fn handle_bus_event(
                 return;
             }
             app.handle_dictation_failure(message);
+        }
+        Ok(BusEvent::TodoUpdated(event)) => {
+            if app
+                .active_client_session_id()
+                .is_some_and(|session_id| session_id == event.session_id.as_str())
+            {
+                app.ensure_workflow_side_panel_pages(false);
+            }
         }
         _ => {}
     }

@@ -338,6 +338,7 @@ mod tests {
             tool_call_id: "test-tool-call".to_string(),
             working_dir: None,
             allowed_tools: None,
+            agent_role: None,
             stdin_request_tx: None,
             graceful_shutdown_signal: None,
             execution_mode: crate::tool::ToolExecutionMode::Direct,

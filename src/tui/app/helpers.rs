@@ -797,7 +797,10 @@ pub(super) fn gather_todos_for_session(session_id: Option<&str>) -> Vec<TodoItem
     Vec::new()
 }
 
-pub(super) fn gather_memory_info(memory_enabled: bool) -> Option<MemoryInfo> {
+pub(super) fn gather_memory_info(
+    memory_enabled: bool,
+    provider_model: Option<(&str, &str)>,
+) -> Option<MemoryInfo> {
     use std::sync::Mutex;
     use std::time::Instant;
 
@@ -809,16 +812,7 @@ pub(super) fn gather_memory_info(memory_enabled: bool) -> Option<MemoryInfo> {
     }
 
     let activity = crate::memory::get_activity();
-    let sidecar_model = if crate::memory::memory_sidecar_enabled() {
-        let sidecar = crate::sidecar::Sidecar::new();
-        Some(format!(
-            "{} · {}",
-            sidecar.backend_name(),
-            sidecar.model_name()
-        ))
-    } else {
-        None
-    };
+    let sidecar_model = sidecar_model_label(provider_model);
 
     if let Ok(mut guard) = CACHE.lock() {
         if let Some((ts, cached, refreshing)) = guard.as_mut() {
@@ -851,8 +845,10 @@ pub(super) fn gather_memory_info(memory_enabled: bool) -> Option<MemoryInfo> {
                 }),
             };
             *refreshing = true;
-            std::thread::spawn(|| {
-                let result = gather_memory_info_inner();
+            let provider_model =
+                provider_model.map(|(provider, model)| (provider.to_string(), model.to_string()));
+            std::thread::spawn(move || {
+                let result = gather_memory_info_inner(provider_model);
                 if let Ok(mut guard) = CACHE.lock() {
                     *guard = Some((Instant::now(), result, false));
                 }
@@ -861,8 +857,10 @@ pub(super) fn gather_memory_info(memory_enabled: bool) -> Option<MemoryInfo> {
         }
 
         *guard = Some((Instant::now() - TTL - Duration::from_secs(1), None, true));
-        std::thread::spawn(|| {
-            let result = gather_memory_info_inner();
+        let provider_model =
+            provider_model.map(|(provider, model)| (provider.to_string(), model.to_string()));
+        std::thread::spawn(move || {
+            let result = gather_memory_info_inner(provider_model);
             if let Ok(mut guard) = CACHE.lock() {
                 *guard = Some((Instant::now(), result, false));
             }
@@ -877,18 +875,23 @@ pub(super) fn gather_memory_info(memory_enabled: bool) -> Option<MemoryInfo> {
     })
 }
 
-fn gather_memory_info_inner() -> Option<MemoryInfo> {
+fn sidecar_model_label(provider_model: Option<(&str, &str)>) -> Option<String> {
+    if !crate::memory::memory_sidecar_enabled() {
+        return None;
+    }
+    let sidecar = provider_model
+        .map(|(provider, model)| crate::sidecar::Sidecar::for_provider_model(provider, model))
+        .unwrap_or_else(crate::sidecar::Sidecar::new);
+    Some(sidecar.display_label())
+}
+
+fn gather_memory_info_inner(provider_model: Option<(String, String)>) -> Option<MemoryInfo> {
     let activity = crate::memory::get_activity();
-    let sidecar_model = if crate::memory::memory_sidecar_enabled() {
-        let sidecar = crate::sidecar::Sidecar::new();
-        Some(format!(
-            "{} · {}",
-            sidecar.backend_name(),
-            sidecar.model_name()
-        ))
-    } else {
-        None
-    };
+    let sidecar_model = sidecar_model_label(
+        provider_model
+            .as_ref()
+            .map(|(provider, model)| (provider.as_str(), model.as_str())),
+    );
 
     use crate::memory::MemoryManager;
 

@@ -94,6 +94,8 @@ pub(super) async fn send_request_with_timeout(
             | "swarm_plan"
             | "swarm_plan_proposal"
             | "swarm_event"
+            | "workflow_question"
+            | "workflow_question_answered"
             | "notification"
             | "soft_interrupt_injected"
             | "session"

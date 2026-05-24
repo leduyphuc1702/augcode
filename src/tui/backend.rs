@@ -801,6 +801,72 @@ impl RemoteConnection {
             .await
     }
 
+    pub async fn approve_plan(
+        &mut self,
+        session_id: String,
+        proposer_session: String,
+    ) -> Result<()> {
+        let id = self.next_request_id;
+        self.next_request_id += 1;
+        self.send_request(Request::CommApprovePlan {
+            id,
+            session_id,
+            proposer_session,
+        })
+        .await
+    }
+
+    pub async fn reject_plan(
+        &mut self,
+        session_id: String,
+        proposer_session: String,
+        reason: Option<String>,
+    ) -> Result<()> {
+        let id = self.next_request_id;
+        self.next_request_id += 1;
+        self.send_request(Request::CommRejectPlan {
+            id,
+            session_id,
+            proposer_session,
+            reason,
+        })
+        .await
+    }
+
+    pub async fn comment_plan(
+        &mut self,
+        session_id: String,
+        proposer_session: String,
+        comments: Vec<crate::protocol::PlanProposalComment>,
+    ) -> Result<()> {
+        let id = self.next_request_id;
+        self.next_request_id += 1;
+        self.send_request(Request::CommCommentPlan {
+            id,
+            session_id,
+            proposer_session,
+            comments,
+        })
+        .await
+    }
+
+    pub async fn answer_workflow_question(
+        &mut self,
+        from_session: String,
+        to_session: String,
+        answer: crate::protocol::WorkflowQuestionAnswer,
+    ) -> Result<()> {
+        let id = self.next_request_id;
+        self.next_request_id += 1;
+        self.send_request(Request::WorkflowAnswerQuestion {
+            id,
+            from_session,
+            to_session,
+            answer,
+        })
+        .await
+    }
+
     /// Read the next event from the server.
     pub async fn next_event(&mut self) -> RemoteRead {
         loop {

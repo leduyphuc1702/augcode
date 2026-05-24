@@ -66,6 +66,7 @@ pub(super) fn handle_tick(app: &mut App) -> bool {
         needs_redraw = true;
     }
     needs_redraw |= app.refresh_todos_view_if_needed();
+    needs_redraw |= app.refresh_context_view_if_needed();
     needs_redraw |= app.refresh_side_panel_linked_content_if_due();
     needs_redraw |= app.poll_model_picker_load();
     needs_redraw |= app.poll_session_picker_load();
@@ -228,7 +229,8 @@ pub(super) fn handle_bus_event(
         }
         Ok(BusEvent::TodoUpdated(event)) => {
             if event.session_id == app.session.id {
-                app.refresh_todos_view_now()
+                app.ensure_workflow_side_panel_pages(false);
+                true
             } else {
                 false
             }

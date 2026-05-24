@@ -235,6 +235,11 @@ async fn handle_remote_key_internal(
     let mut modifiers = modifiers;
     ctrl_bracket_fallback_to_esc(&mut code, &mut modifiers);
 
+    if app.workflow_modal.is_some() {
+        app.handle_workflow_modal_key(code, modifiers);
+        return Ok(());
+    }
+
     if app.changelog_scroll.is_some() {
         return app.handle_changelog_key(code);
     }
@@ -1464,7 +1469,8 @@ async fn handle_remote_key_internal(
                 }
 
                 if trimmed == "/swarm" || trimmed == "/swarm status" {
-                    let default_enabled = crate::config::config().features.swarm;
+                    let features = &crate::config::config().features;
+                    let default_enabled = features.swarm && features.agent_workflow;
                     app.push_display_message(DisplayMessage::system(format!(
                         "Swarm feature: **{}** (config default: {})",
                         if app.swarm_enabled {

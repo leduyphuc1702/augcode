@@ -6,8 +6,8 @@ use super::{
 };
 use crate::message::{Message, StreamEvent, ToolDefinition};
 use crate::protocol::{
-    AgentInfo, AgentStatusSnapshot, AwaitedMemberStatus, HistoryMessage, Request, ServerEvent,
-    SessionActivitySnapshot, ToolCallSummary,
+    AgentInfo, AgentStatusSnapshot, AwaitedMemberStatus, HistoryMessage, NotificationType, Request,
+    ServerEvent, SessionActivitySnapshot, ToolCallSummary, WorkflowQuestionAnswer,
 };
 use crate::provider::{EventStream, Provider};
 use crate::server::Server;
@@ -482,6 +482,7 @@ fn test_ctx(session_id: &str, working_dir: &Path) -> ToolContext {
         tool_call_id: "call-1".to_string(),
         working_dir: Some(working_dir.to_path_buf()),
         allowed_tools: None,
+        agent_role: None,
         stdin_request_tx: None,
         graceful_shutdown_signal: None,
         execution_mode: ToolExecutionMode::Direct,
@@ -548,3 +549,4 @@ fn default_await_members_targets_include_ready() {
 include!("communicate_tests/input_format.rs");
 include!("communicate_tests/end_to_end.rs");
 include!("communicate_tests/assignment.rs");
+include!("communicate_tests/workflow.rs");

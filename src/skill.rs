@@ -318,8 +318,21 @@ impl SkillRegistry {
                 self.load_from_skill_root_count(&root, Some(working_dir))?;
             }
         }
+        if crate::config::config().skills.allow_custom_local {
+            self.load_agent_skill_roots(working_dir)?;
+        }
 
         Ok(())
+    }
+
+    fn load_agent_skill_roots(&mut self, working_dir: Option<&Path>) -> Result<usize> {
+        let mut count = 0;
+        for base in crate::agent_workflow::project_agent_skill_roots(working_dir) {
+            for role in crate::agent_workflow::roles() {
+                count += self.load_from_skill_root_count(&base.join(role), working_dir)?;
+            }
+        }
+        Ok(count)
     }
 
     fn discover_nested_skill_roots(working_dir: &Path) -> Vec<PathBuf> {
@@ -427,13 +440,17 @@ impl SkillRegistry {
         );
         let search_text = build_skill_search_text(&name, &description, &body);
         let source_kind = crate::skill_router::source_kind_for_root(skill_root).to_string();
-        let scope_dir = workspace_root.and_then(|workspace| {
-            skill_root
-                .parent()
-                .and_then(Path::parent)
-                .filter(|scope| *scope != workspace || skill_root.starts_with(workspace))
-                .map(Path::to_path_buf)
-        });
+        let scope_dir = if source_kind == crate::skill_router::SOURCE_CUSTOM_LOCAL {
+            None
+        } else {
+            workspace_root.and_then(|workspace| {
+                skill_root
+                    .parent()
+                    .and_then(Path::parent)
+                    .filter(|scope| *scope != workspace || skill_root.starts_with(workspace))
+                    .map(Path::to_path_buf)
+            })
+        };
         let manifest = CanonicalSkillManifest::from_input(ManifestInput {
             name: name.clone(),
             description: description.clone(),

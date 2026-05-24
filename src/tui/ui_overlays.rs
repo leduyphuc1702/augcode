@@ -187,6 +187,14 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
         "Attempt recovery when model cannot continue",
     ));
     lines.push(help_entry(
+        "/approve-plan",
+        "Unlock workflow implementation agents",
+    ));
+    lines.push(help_entry(
+        "/approve-review",
+        "Accept workflow review and complete",
+    ));
+    lines.push(help_entry(
         "/poke",
         "Poke model to resume with incomplete todos (on/off/status)",
     ));

@@ -483,6 +483,7 @@ impl Agent {
                             tool_call_id: request_id.clone(),
                             working_dir: self.working_dir().map(PathBuf::from),
                             allowed_tools: self.allowed_tools.clone(),
+                            agent_role: self.session.agent_role.clone(),
                             stdin_request_tx: self.stdin_request_tx.clone(),
                             graceful_shutdown_signal: Some(self.graceful_shutdown.clone()),
                             execution_mode: ToolExecutionMode::AgentTurn,
@@ -836,6 +837,7 @@ impl Agent {
                     tool_call_id: tc.id.clone(),
                     working_dir: self.working_dir().map(PathBuf::from),
                     allowed_tools: self.allowed_tools.clone(),
+                    agent_role: self.session.agent_role.clone(),
                     stdin_request_tx: self.stdin_request_tx.clone(),
                     graceful_shutdown_signal: Some(self.graceful_shutdown.clone()),
                     execution_mode: ToolExecutionMode::AgentTurn,
@@ -1055,6 +1057,7 @@ impl Agent {
             }
 
             if tool_results_dirty {
+                self.refresh_workflow_metadata_from_disk();
                 self.session.save()?;
             }
 

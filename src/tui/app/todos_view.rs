@@ -45,13 +45,17 @@ impl App {
         }
 
         snapshot.pages.retain(|page| page.id != TODOS_VIEW_PAGE_ID);
-        snapshot.pages.push(self.todos_view_page());
-        snapshot.pages.sort_by(|a, b| {
-            b.updated_at_ms
-                .cmp(&a.updated_at_ms)
-                .then_with(|| a.id.cmp(&b.id))
-        });
-        if focus_todos || snapshot.focused_page_id.is_none() {
+        let page = self.todos_view_page();
+        if let Some(context_idx) = snapshot
+            .pages
+            .iter()
+            .position(|page| page.id == super::context_view::CONTEXT_VIEW_PAGE_ID)
+        {
+            snapshot.pages.insert(context_idx, page);
+        } else {
+            snapshot.pages.push(page);
+        }
+        if focus_todos {
             snapshot.focused_page_id = Some(TODOS_VIEW_PAGE_ID.to_string());
         }
         snapshot

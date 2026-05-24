@@ -275,6 +275,31 @@ pub struct PlanGraphStatus {
     pub newly_ready_ids: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PlanProposalComment {
+    pub range_start: usize,
+    pub range_end: usize,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quote: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct QuestionOption {
+    pub id: String,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkflowQuestionAnswer {
+    pub question_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub option_id: Option<String>,
+    pub answer_text: String,
+}
+
 impl PlanGraphStatus {
     pub fn empty_for_swarm(swarm_id: impl Into<String>) -> Self {
         Self {
@@ -412,6 +437,9 @@ impl Request {
             Request::CommProposePlan { id, .. } => *id,
             Request::CommApprovePlan { id, .. } => *id,
             Request::CommRejectPlan { id, .. } => *id,
+            Request::CommCommentPlan { id, .. } => *id,
+            Request::WorkflowAskQuestion { id, .. } => *id,
+            Request::WorkflowAnswerQuestion { id, .. } => *id,
             Request::CommSpawn { id, .. } => *id,
             Request::CommStop { id, .. } => *id,
             Request::CommAssignRole { id, .. } => *id,
@@ -443,6 +471,9 @@ impl Request {
                 | Request::CommProposePlan { .. }
                 | Request::CommApprovePlan { .. }
                 | Request::CommRejectPlan { .. }
+                | Request::CommCommentPlan { .. }
+                | Request::WorkflowAskQuestion { .. }
+                | Request::WorkflowAnswerQuestion { .. }
                 | Request::CommSpawn { .. }
                 | Request::CommStop { .. }
                 | Request::CommAssignRole { .. }

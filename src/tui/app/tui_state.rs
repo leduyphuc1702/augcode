@@ -901,7 +901,14 @@ impl crate::tui::TuiState for App {
             }
         });
 
-        let memory_info = gather_memory_info(self.memory_enabled);
+        let memory_provider = <Self as crate::tui::TuiState>::provider_name(self);
+        let memory_model = model
+            .clone()
+            .unwrap_or_else(|| <Self as crate::tui::TuiState>::provider_model(self));
+        let memory_info = gather_memory_info(
+            self.memory_enabled,
+            Some((memory_provider.as_str(), memory_model.as_str())),
+        );
 
         // Gather swarm info
         let swarm_info = if self.swarm_enabled {
@@ -1238,6 +1245,10 @@ impl crate::tui::TuiState for App {
 
     fn inline_view_state(&self) -> Option<&crate::tui::InlineViewState> {
         self.inline_view_state.as_ref()
+    }
+
+    fn workflow_modal(&self) -> Option<&crate::tui::workflow_modal::WorkflowModalState> {
+        self.workflow_modal.as_ref()
     }
 
     fn changelog_scroll(&self) -> Option<usize> {
