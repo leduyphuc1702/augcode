@@ -4,13 +4,16 @@
 //! need the full Agent SDK infrastructure.
 //!
 //! Automatically selects the best available backend:
+//! - Local OpenAI-compatible default provider when it points at localhost/private LAN
 //! - OpenAI (gpt-5.3-codex-spark) if Codex credentials are available
 //! - Claude (claude-haiku-4-5-20241022) if Claude credentials are available
 
 use crate::auth;
 use anyhow::{Context, Result};
 use reqwest::StatusCode;
+use reqwest::header::{HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
+use std::net::IpAddr;
 
 /// Fast/cheap OpenAI model used when Codex credentials are available.
 pub const SIDECAR_OPENAI_MODEL: &str = "gpt-5.3-codex-spark";
@@ -47,6 +50,43 @@ const DEFAULT_MAX_TOKENS: u32 = 1024;
 enum SidecarBackend {
     OpenAI,
     Claude,
+    LocalOpenAI,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LocalOpenAiEndpoint {
+    base_url: String,
+    auth: LocalOpenAiAuth,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum LocalOpenAiAuth {
+    None,
+    Bearer(String),
+    Header { name: String, value: String },
+}
+
+impl LocalOpenAiAuth {
+    fn apply(&self, builder: reqwest::RequestBuilder) -> Result<reqwest::RequestBuilder> {
+        match self {
+            Self::None => Ok(builder),
+            Self::Bearer(token) => Ok(builder.header("Authorization", format!("Bearer {}", token))),
+            Self::Header { name, value } => {
+                let name = HeaderName::from_bytes(name.as_bytes())
+                    .context("Invalid local OpenAI-compatible auth header name")?;
+                let value = HeaderValue::from_str(value)
+                    .context("Invalid local OpenAI-compatible auth header value")?;
+                Ok(builder.header(name, value))
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct LocalOpenAiCandidate {
+    endpoint: LocalOpenAiEndpoint,
+    default_model: Option<String>,
+    static_models: Vec<String>,
 }
 
 /// Lightweight client for fast sidecar calls
@@ -56,6 +96,7 @@ pub struct Sidecar {
     model: String,
     max_tokens: u32,
     backend: SidecarBackend,
+    local_openai: Option<LocalOpenAiEndpoint>,
 }
 
 impl Sidecar {
@@ -67,29 +108,60 @@ impl Sidecar {
     }
 
     fn with_configured_model(configured_model: Option<String>) -> Self {
-        let (backend, model) = if let Some(model) = configured_model {
-            match crate::provider::provider_for_model(&model) {
-                Some("openai") => (SidecarBackend::OpenAI, model),
-                Some("claude") => (SidecarBackend::Claude, model),
+        Self::with_configured_model_and_config(configured_model, crate::config::config())
+    }
+
+    fn with_configured_model_and_config(
+        configured_model: Option<String>,
+        cfg: &crate::config::Config,
+    ) -> Self {
+        let configured_model = configured_model
+            .as_deref()
+            .map(str::trim)
+            .filter(|model| !model.is_empty());
+
+        let (backend, model, local_openai) = if let Some(model) = configured_model {
+            let local = resolve_local_openai_sidecar(Some(model), cfg);
+            match known_cloud_sidecar_backend(model).or_else(|| {
+                local
+                    .is_none()
+                    .then(|| heuristic_cloud_sidecar_backend(model))
+                    .flatten()
+            }) {
+                Some(SidecarBackend::OpenAI) => (SidecarBackend::OpenAI, model.to_string(), None),
+                Some(SidecarBackend::Claude) => (SidecarBackend::Claude, model.to_string(), None),
+                _ if let Some((model, endpoint)) = local => {
+                    (SidecarBackend::LocalOpenAI, model, Some(endpoint))
+                }
                 _ => {
                     crate::logging::warn(&format!(
-                        "Ignoring unsupported memory sidecar model override '{}'; expected an OpenAI or Claude model",
+                        "Ignoring unsupported memory sidecar model override '{}'; expected an OpenAI, Claude, or local OpenAI-compatible model",
                         model
                     ));
-                    if auth::codex::load_credentials().is_ok() {
-                        (SidecarBackend::OpenAI, SIDECAR_OPENAI_MODEL.to_string())
-                    } else {
-                        (SidecarBackend::Claude, SIDECAR_CLAUDE_MODEL.to_string())
-                    }
+                    cloud_sidecar_fallback()
                 }
             }
+        } else if let Some((model, endpoint)) = resolve_local_openai_sidecar(None, cfg) {
+            (SidecarBackend::LocalOpenAI, model, Some(endpoint))
         } else if auth::codex::load_credentials().is_ok() {
-            (SidecarBackend::OpenAI, SIDECAR_OPENAI_MODEL.to_string())
+            (
+                SidecarBackend::OpenAI,
+                SIDECAR_OPENAI_MODEL.to_string(),
+                None,
+            )
         } else if auth::claude::load_credentials().is_ok() {
-            (SidecarBackend::Claude, SIDECAR_CLAUDE_MODEL.to_string())
+            (
+                SidecarBackend::Claude,
+                SIDECAR_CLAUDE_MODEL.to_string(),
+                None,
+            )
         } else {
             // Default to Claude - will fail on use with a clear error
-            (SidecarBackend::Claude, SIDECAR_CLAUDE_MODEL.to_string())
+            (
+                SidecarBackend::Claude,
+                SIDECAR_CLAUDE_MODEL.to_string(),
+                None,
+            )
         };
 
         Self {
@@ -97,6 +169,7 @@ impl Sidecar {
             model,
             max_tokens: DEFAULT_MAX_TOKENS,
             backend,
+            local_openai,
         }
     }
 
@@ -110,6 +183,7 @@ impl Sidecar {
         match self.backend {
             SidecarBackend::OpenAI => "openai",
             SidecarBackend::Claude => "claude",
+            SidecarBackend::LocalOpenAI => "local",
         }
     }
 
@@ -119,6 +193,14 @@ impl Sidecar {
         match self.backend {
             SidecarBackend::OpenAI => self.complete_openai(system, user_message).await,
             SidecarBackend::Claude => self.complete_claude(system, user_message).await,
+            SidecarBackend::LocalOpenAI => {
+                let endpoint = self
+                    .local_openai
+                    .as_ref()
+                    .context("Local OpenAI-compatible sidecar endpoint missing")?;
+                self.complete_local_openai(endpoint, system, user_message)
+                    .await
+            }
         }
     }
 
@@ -323,6 +405,42 @@ impl Sidecar {
         Ok(text)
     }
 
+    async fn complete_local_openai(
+        &self,
+        endpoint: &LocalOpenAiEndpoint,
+        system: &str,
+        user_message: &str,
+    ) -> Result<String> {
+        let url = format!(
+            "{}/chat/completions",
+            endpoint.base_url.trim_end_matches('/')
+        );
+        let request = build_local_chat_request(&self.model, system, user_message, self.max_tokens);
+        let builder = self
+            .client
+            .post(url)
+            .header("Content-Type", "application/json");
+        let response = endpoint
+            .auth
+            .apply(builder)?
+            .json(&request)
+            .send()
+            .await
+            .context("Failed to send request to local OpenAI-compatible API")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("Local OpenAI-compatible API error ({}): {}", status, body);
+        }
+
+        let result: serde_json::Value = response
+            .json()
+            .await
+            .context("Failed to parse local OpenAI-compatible response")?;
+        extract_local_chat_response_text(&result)
+    }
+
     /// Check if a memory is relevant to the current context
     /// Returns (is_relevant, explanation)
     pub async fn check_relevance(
@@ -471,6 +589,321 @@ impl Default for Sidecar {
 #[cfg(test)]
 pub const SIDECAR_FAST_MODEL: &str = SIDECAR_OPENAI_MODEL;
 
+fn cloud_sidecar_fallback() -> (SidecarBackend, String, Option<LocalOpenAiEndpoint>) {
+    if auth::codex::load_credentials().is_ok() {
+        (
+            SidecarBackend::OpenAI,
+            SIDECAR_OPENAI_MODEL.to_string(),
+            None,
+        )
+    } else {
+        (
+            SidecarBackend::Claude,
+            SIDECAR_CLAUDE_MODEL.to_string(),
+            None,
+        )
+    }
+}
+
+fn known_cloud_sidecar_backend(model: &str) -> Option<SidecarBackend> {
+    if model == SIDECAR_OPENAI_MODEL || crate::provider::ALL_OPENAI_MODELS.contains(&model) {
+        Some(SidecarBackend::OpenAI)
+    } else if model == SIDECAR_CLAUDE_MODEL || crate::provider::ALL_CLAUDE_MODELS.contains(&model) {
+        Some(SidecarBackend::Claude)
+    } else {
+        None
+    }
+}
+
+fn heuristic_cloud_sidecar_backend(model: &str) -> Option<SidecarBackend> {
+    match crate::provider::provider_for_model(model) {
+        Some("openai") => Some(SidecarBackend::OpenAI),
+        Some("claude") => Some(SidecarBackend::Claude),
+        _ => None,
+    }
+}
+
+fn resolve_local_openai_sidecar(
+    configured_model: Option<&str>,
+    cfg: &crate::config::Config,
+) -> Option<(String, LocalOpenAiEndpoint)> {
+    let candidate = local_openai_candidate(cfg)?;
+    let model = configured_model
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(ToString::to_string)
+        .or_else(|| {
+            cfg.provider
+                .default_model
+                .as_deref()
+                .map(str::trim)
+                .filter(|model| !model.is_empty())
+                .map(ToString::to_string)
+        })
+        .or(candidate.default_model)
+        .or_else(|| candidate.static_models.into_iter().next())?;
+
+    Some((model, candidate.endpoint))
+}
+
+fn local_openai_candidate(cfg: &crate::config::Config) -> Option<LocalOpenAiCandidate> {
+    active_local_openai_candidate(cfg).or_else(|| default_provider_local_openai_candidate(cfg))
+}
+
+fn active_local_openai_candidate(cfg: &crate::config::Config) -> Option<LocalOpenAiCandidate> {
+    for key in [
+        "JCODE_NAMED_PROVIDER_PROFILE",
+        "JCODE_PROVIDER_PROFILE_NAME",
+    ] {
+        if let Ok(profile_name) = std::env::var(key) {
+            let profile_name = profile_name.trim();
+            if let Some(profile) = cfg.providers.get(profile_name)
+                && let Some(candidate) = local_openai_candidate_from_named_profile(profile)
+            {
+                return Some(candidate);
+            }
+        }
+    }
+
+    if let Ok(namespace) = std::env::var("JCODE_OPENROUTER_CACHE_NAMESPACE") {
+        let namespace = namespace.trim();
+        if let Some(profile) = cfg.providers.get(namespace)
+            && let Some(candidate) = local_openai_candidate_from_named_profile(profile)
+        {
+            return Some(candidate);
+        }
+        if let Some(profile) = crate::provider_catalog::openai_compatible_profile_by_id(namespace)
+            && let Some(candidate) = local_openai_candidate_from_profile(profile)
+        {
+            return Some(candidate);
+        }
+    }
+
+    local_openai_candidate_from_openrouter_env()
+}
+
+fn default_provider_local_openai_candidate(
+    cfg: &crate::config::Config,
+) -> Option<LocalOpenAiCandidate> {
+    let provider = cfg
+        .provider
+        .default_provider
+        .as_deref()
+        .map(str::trim)
+        .filter(|provider| !provider.is_empty())?;
+
+    if let Some(profile) =
+        crate::provider_catalog::resolve_openai_compatible_profile_selection(provider)
+    {
+        return local_openai_candidate_from_profile(profile);
+    }
+
+    cfg.providers
+        .get(provider)
+        .and_then(local_openai_candidate_from_named_profile)
+}
+
+fn local_openai_candidate_from_profile(
+    profile: crate::provider_catalog::OpenAiCompatibleProfile,
+) -> Option<LocalOpenAiCandidate> {
+    let resolved = crate::provider_catalog::resolve_openai_compatible_profile(profile);
+    if !api_base_is_local(&resolved.api_base) {
+        return None;
+    }
+
+    let auth = crate::provider_catalog::load_api_key_from_env_or_config(
+        &resolved.api_key_env,
+        &resolved.env_file,
+    )
+    .map(LocalOpenAiAuth::Bearer)
+    .or_else(|| (!resolved.requires_api_key).then_some(LocalOpenAiAuth::None))?;
+
+    Some(LocalOpenAiCandidate {
+        endpoint: LocalOpenAiEndpoint {
+            base_url: resolved.api_base,
+            auth,
+        },
+        default_model: resolved
+            .default_model
+            .map(|model| model.trim().to_string())
+            .filter(|model| !model.is_empty()),
+        static_models: crate::provider_catalog::openai_compatible_profile_static_models(profile),
+    })
+}
+
+fn local_openai_candidate_from_named_profile(
+    profile: &crate::config::NamedProviderConfig,
+) -> Option<LocalOpenAiCandidate> {
+    let base_url = crate::provider_catalog::normalize_api_base(&profile.base_url)?;
+    if !api_base_is_local(&base_url) {
+        return None;
+    }
+
+    let auth = local_auth_from_named_profile(profile, &base_url)?;
+    Some(LocalOpenAiCandidate {
+        endpoint: LocalOpenAiEndpoint { base_url, auth },
+        default_model: profile
+            .default_model
+            .as_deref()
+            .map(str::trim)
+            .filter(|model| !model.is_empty())
+            .map(ToString::to_string),
+        static_models: profile
+            .models
+            .iter()
+            .map(|model| model.id.trim())
+            .filter(|model| !model.is_empty())
+            .map(ToString::to_string)
+            .collect(),
+    })
+}
+
+fn local_auth_from_named_profile(
+    profile: &crate::config::NamedProviderConfig,
+    base_url: &str,
+) -> Option<LocalOpenAiAuth> {
+    let key = profile
+        .api_key_env
+        .as_deref()
+        .map(str::trim)
+        .filter(|env| !env.is_empty())
+        .and_then(|env| {
+            if let Some(env_file) = profile
+                .env_file
+                .as_deref()
+                .map(str::trim)
+                .filter(|file| !file.is_empty())
+            {
+                crate::provider_catalog::load_api_key_from_env_or_config(env, env_file)
+            } else {
+                std::env::var(env)
+                    .ok()
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+            }
+        })
+        .or_else(|| {
+            profile
+                .api_key
+                .as_deref()
+                .map(str::trim)
+                .filter(|key| !key.is_empty())
+                .map(ToString::to_string)
+        });
+
+    let requires_key = profile
+        .requires_api_key
+        .unwrap_or(!api_base_is_local(base_url));
+    match profile.auth {
+        crate::config::NamedProviderAuth::None => Some(LocalOpenAiAuth::None),
+        crate::config::NamedProviderAuth::Bearer => key
+            .map(LocalOpenAiAuth::Bearer)
+            .or_else(|| (!requires_key).then_some(LocalOpenAiAuth::None)),
+        crate::config::NamedProviderAuth::Header => key
+            .map(|value| LocalOpenAiAuth::Header {
+                name: profile
+                    .auth_header
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or("api-key")
+                    .to_string(),
+                value,
+            })
+            .or_else(|| (!requires_key).then_some(LocalOpenAiAuth::None)),
+    }
+}
+
+fn local_openai_candidate_from_openrouter_env() -> Option<LocalOpenAiCandidate> {
+    let base_url = std::env::var("JCODE_OPENROUTER_API_BASE")
+        .ok()
+        .and_then(|value| crate::provider_catalog::normalize_api_base(value.trim()))?;
+    if !api_base_is_local(&base_url) {
+        return None;
+    }
+
+    let key_name = std::env::var("JCODE_OPENROUTER_API_KEY_NAME")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "OPENROUTER_API_KEY".to_string());
+    let env_file = std::env::var("JCODE_OPENROUTER_ENV_FILE")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "openrouter.env".to_string());
+    let key = crate::provider_catalog::load_api_key_from_env_or_config(&key_name, &env_file);
+    let allow_no_auth = std::env::var("JCODE_OPENROUTER_ALLOW_NO_AUTH")
+        .ok()
+        .is_some_and(|value| parse_bool_like(&value));
+
+    let auth = match key {
+        Some(value) if openrouter_env_uses_api_key_header() => LocalOpenAiAuth::Header {
+            name: std::env::var("JCODE_OPENROUTER_AUTH_HEADER_NAME")
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "api-key".to_string()),
+            value,
+        },
+        Some(value) => LocalOpenAiAuth::Bearer(value),
+        None if allow_no_auth || api_base_is_local(&base_url) => LocalOpenAiAuth::None,
+        None => return None,
+    };
+
+    Some(LocalOpenAiCandidate {
+        endpoint: LocalOpenAiEndpoint { base_url, auth },
+        default_model: std::env::var("JCODE_OPENROUTER_MODEL")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
+        static_models: std::env::var("JCODE_OPENROUTER_STATIC_MODELS")
+            .ok()
+            .map(|value| crate::provider_catalog::parse_openai_compatible_models(&value))
+            .unwrap_or_default(),
+    })
+}
+
+fn openrouter_env_uses_api_key_header() -> bool {
+    std::env::var("JCODE_OPENROUTER_AUTH_HEADER")
+        .ok()
+        .is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "api-key" | "apikey" | "header"
+            )
+        })
+}
+
+fn parse_bool_like(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+fn api_base_is_local(raw: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(raw) else {
+        return false;
+    };
+    let Some(host) = parsed.host_str().map(|host| host.to_ascii_lowercase()) else {
+        return false;
+    };
+
+    if matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1") || host.ends_with(".local") {
+        return true;
+    }
+
+    match host.parse::<IpAddr>() {
+        Ok(IpAddr::V4(addr)) => addr.is_loopback() || addr.is_private() || addr.is_link_local(),
+        Ok(IpAddr::V6(addr)) => {
+            let first = addr.segments()[0];
+            addr.is_loopback() || (first & 0xfe00) == 0xfc00 || (first & 0xffc0) == 0xfe80
+        }
+        Err(_) => false,
+    }
+}
+
 fn resolve_openai_request_model(
     preferred_model: &str,
     is_chatgpt_mode: bool,
@@ -520,6 +953,71 @@ fn build_openai_request(
     }
 
     request
+}
+
+fn build_local_chat_request(
+    model: &str,
+    system: &str,
+    user_message: &str,
+    max_tokens: u32,
+) -> serde_json::Value {
+    let mut messages = Vec::new();
+    if !system.is_empty() {
+        messages.push(serde_json::json!({
+            "role": "system",
+            "content": system,
+        }));
+    }
+    messages.push(serde_json::json!({
+        "role": "user",
+        "content": user_message,
+    }));
+
+    serde_json::json!({
+        "model": model,
+        "messages": messages,
+        "stream": false,
+        "max_tokens": max_tokens,
+    })
+}
+
+fn extract_local_chat_response_text(result: &serde_json::Value) -> Result<String> {
+    let choices = result
+        .get("choices")
+        .and_then(|value| value.as_array())
+        .context("Local OpenAI-compatible response missing choices")?;
+
+    for choice in choices {
+        if let Some(content) = choice
+            .get("message")
+            .and_then(|message| message.get("content"))
+            .and_then(local_chat_content_to_text)
+        {
+            return Ok(content);
+        }
+    }
+
+    Ok(String::new())
+}
+
+fn local_chat_content_to_text(value: &serde_json::Value) -> Option<String> {
+    if let Some(text) = value.as_str() {
+        return Some(text.to_string());
+    }
+
+    let parts = value.as_array()?;
+    let text = parts
+        .iter()
+        .filter_map(|part| {
+            part.as_str().map(ToString::to_string).or_else(|| {
+                part.get("text")
+                    .and_then(|value| value.as_str())
+                    .map(ToString::to_string)
+            })
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    Some(text)
 }
 
 fn classify_openai_model_unavailable(status: StatusCode, body: &str) -> Option<String> {
@@ -753,7 +1251,12 @@ struct ClaudeUsage {
 mod tests {
     use super::*;
     use crate::auth::codex;
-    use std::ffi::OsString;
+    use std::ffi::{OsStr, OsString};
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::Duration;
 
     struct EnvVarGuard {
         key: &'static str,
@@ -761,6 +1264,12 @@ mod tests {
     }
 
     impl EnvVarGuard {
+        fn set<K: AsRef<OsStr>>(key: &'static str, value: K) -> Self {
+            let previous = std::env::var_os(key);
+            crate::env::set_var(key, value);
+            Self { key, previous }
+        }
+
         fn set_path(key: &'static str, value: &std::path::Path) -> Self {
             let previous = std::env::var_os(key);
             crate::env::set_var(key, value);
@@ -782,6 +1291,48 @@ mod tests {
                 crate::env::remove_var(self.key);
             }
         }
+    }
+
+    fn unset_vars(keys: &[&'static str]) -> Vec<EnvVarGuard> {
+        keys.iter().copied().map(EnvVarGuard::unset).collect()
+    }
+
+    fn local_test_env_vars() -> Vec<EnvVarGuard> {
+        unset_vars(&[
+            "JCODE_NAMED_PROVIDER_PROFILE",
+            "JCODE_PROVIDER_PROFILE_NAME",
+            "JCODE_OPENROUTER_CACHE_NAMESPACE",
+            "JCODE_OPENROUTER_API_BASE",
+            "JCODE_OPENROUTER_API_KEY_NAME",
+            "JCODE_OPENROUTER_ENV_FILE",
+            "JCODE_OPENROUTER_ALLOW_NO_AUTH",
+            "JCODE_OPENROUTER_MODEL",
+            "JCODE_OPENROUTER_STATIC_MODELS",
+            "JCODE_OPENROUTER_AUTH_HEADER",
+            "JCODE_OPENROUTER_AUTH_HEADER_NAME",
+            "OPENROUTER_API_KEY",
+            "OPENAI_API_KEY",
+        ])
+    }
+
+    fn local_named_config(base_url: &str) -> crate::config::Config {
+        let mut cfg = crate::config::Config::default();
+        cfg.provider.default_provider = Some("local-memory".to_string());
+        cfg.provider.default_model = Some("provider-default".to_string());
+        cfg.providers.insert(
+            "local-memory".to_string(),
+            crate::config::NamedProviderConfig {
+                base_url: base_url.to_string(),
+                auth: crate::config::NamedProviderAuth::None,
+                default_model: Some("profile-default".to_string()),
+                models: vec![crate::config::NamedProviderModelConfig {
+                    id: "static-default".to_string(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        );
+        cfg
     }
 
     #[test]
@@ -815,6 +1366,201 @@ mod tests {
         assert_eq!(sidecar.model, SIDECAR_OPENAI_MODEL);
         codex::set_active_account_override(None);
         crate::auth::claude::set_active_account_override(None);
+    }
+
+    #[test]
+    fn test_backend_selection_prefers_local_named_provider_over_openai_creds() {
+        let _guard = crate::storage::lock_test_env();
+        let temp = tempfile::TempDir::new().expect("create temp jcode home");
+        let _home = EnvVarGuard::set_path("JCODE_HOME", temp.path());
+        let _env = local_test_env_vars();
+
+        codex::upsert_account_from_tokens("openai-1", "sk-test-key-123", "", None, None)
+            .expect("write OpenAI test auth");
+
+        let cfg = local_named_config("http://localhost:11434/v1");
+        let sidecar = Sidecar::with_configured_model_and_config(None, &cfg);
+
+        assert_eq!(sidecar.backend, SidecarBackend::LocalOpenAI);
+        assert_eq!(sidecar.backend_name(), "local");
+        assert_eq!(sidecar.model, "provider-default");
+        assert_eq!(
+            sidecar
+                .local_openai
+                .as_ref()
+                .map(|endpoint| endpoint.base_url.as_str()),
+            Some("http://localhost:11434/v1")
+        );
+        codex::set_active_account_override(None);
+    }
+
+    #[test]
+    fn test_memory_model_override_uses_local_default_provider() {
+        let _guard = crate::storage::lock_test_env();
+        let temp = tempfile::TempDir::new().expect("create temp jcode home");
+        let _home = EnvVarGuard::set_path("JCODE_HOME", temp.path());
+        let _env = local_test_env_vars();
+
+        let cfg = local_named_config("http://127.0.0.1:11434/v1");
+        let sidecar = Sidecar::with_configured_model_and_config(Some("llama3.2".to_string()), &cfg);
+
+        assert_eq!(sidecar.backend, SidecarBackend::LocalOpenAI);
+        assert_eq!(sidecar.model, "llama3.2");
+    }
+
+    #[test]
+    fn test_gpt_like_memory_model_override_stays_local_when_local_provider_is_configured() {
+        let _guard = crate::storage::lock_test_env();
+        let temp = tempfile::TempDir::new().expect("create temp jcode home");
+        let _home = EnvVarGuard::set_path("JCODE_HOME", temp.path());
+        let _env = local_test_env_vars();
+
+        let cfg = local_named_config("http://127.0.0.1:11434/v1");
+        let sidecar =
+            Sidecar::with_configured_model_and_config(Some("gpt-oss-120b".to_string()), &cfg);
+
+        assert_eq!(sidecar.backend, SidecarBackend::LocalOpenAI);
+        assert_eq!(sidecar.model, "gpt-oss-120b");
+    }
+
+    #[test]
+    fn test_remote_openai_compatible_default_does_not_auto_route_memory() {
+        let _guard = crate::storage::lock_test_env();
+        let temp = tempfile::TempDir::new().expect("create temp jcode home");
+        let _home = EnvVarGuard::set_path("JCODE_HOME", temp.path());
+        let _env = local_test_env_vars();
+
+        let mut cfg = crate::config::Config::default();
+        cfg.provider.default_provider = Some("remote-memory".to_string());
+        cfg.provider.default_model = Some("remote-model".to_string());
+        cfg.providers.insert(
+            "remote-memory".to_string(),
+            crate::config::NamedProviderConfig {
+                base_url: "https://compat.example.test/v1".to_string(),
+                auth: crate::config::NamedProviderAuth::None,
+                default_model: Some("remote-model".to_string()),
+                ..Default::default()
+            },
+        );
+
+        let sidecar = Sidecar::with_configured_model_and_config(None, &cfg);
+
+        assert_eq!(sidecar.backend, SidecarBackend::Claude);
+        assert_eq!(sidecar.model, SIDECAR_CLAUDE_MODEL);
+        assert!(sidecar.local_openai.is_none());
+    }
+
+    #[test]
+    fn test_explicit_openai_and_claude_memory_overrides_are_unchanged() {
+        let _guard = crate::storage::lock_test_env();
+        let temp = tempfile::TempDir::new().expect("create temp jcode home");
+        let _home = EnvVarGuard::set_path("JCODE_HOME", temp.path());
+        let _env = local_test_env_vars();
+        let cfg = local_named_config("http://localhost:11434/v1");
+
+        let openai =
+            Sidecar::with_configured_model_and_config(Some(SIDECAR_OPENAI_MODEL.to_string()), &cfg);
+        assert_eq!(openai.backend, SidecarBackend::OpenAI);
+        assert_eq!(openai.model, SIDECAR_OPENAI_MODEL);
+
+        let claude =
+            Sidecar::with_configured_model_and_config(Some(SIDECAR_CLAUDE_MODEL.to_string()), &cfg);
+        assert_eq!(claude.backend, SidecarBackend::Claude);
+        assert_eq!(claude.model, SIDECAR_CLAUDE_MODEL);
+    }
+
+    #[tokio::test]
+    async fn test_local_openai_complete_uses_chat_completions_endpoint() {
+        let _guard = crate::storage::lock_test_env();
+        let temp = tempfile::TempDir::new().expect("create temp jcode home");
+        let _home = EnvVarGuard::set_path("JCODE_HOME", temp.path());
+        let mut env = local_test_env_vars();
+        env.push(EnvVarGuard::set("NO_PROXY", "127.0.0.1,localhost"));
+        env.push(EnvVarGuard::set("no_proxy", "127.0.0.1,localhost"));
+
+        let (base_url, request_rx, handle) = spawn_local_chat_server();
+        let mut cfg = crate::config::Config::default();
+        cfg.provider.default_provider = Some("local-memory".to_string());
+        cfg.providers.insert(
+            "local-memory".to_string(),
+            crate::config::NamedProviderConfig {
+                base_url,
+                auth: crate::config::NamedProviderAuth::Header,
+                auth_header: Some("x-api-key".to_string()),
+                api_key: Some("secret".to_string()),
+                default_model: Some("local-chat".to_string()),
+                ..Default::default()
+            },
+        );
+
+        let sidecar = Sidecar::with_configured_model_and_config(None, &cfg);
+        let text = sidecar
+            .complete("system prompt", "user prompt")
+            .await
+            .expect("local sidecar response");
+        assert_eq!(text, "local ok");
+
+        let request = request_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("server captured request");
+        assert!(request.starts_with("POST /v1/chat/completions "));
+        assert!(request.to_ascii_lowercase().contains("x-api-key: secret"));
+        assert!(request.contains(r#""model":"local-chat""#));
+        assert!(request.contains(r#""role":"system""#));
+        assert!(request.contains(r#""content":"system prompt""#));
+        assert!(request.contains(r#""role":"user""#));
+        assert!(request.contains(r#""content":"user prompt""#));
+        handle.join().expect("server thread");
+    }
+
+    fn spawn_local_chat_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind local chat server");
+        let addr = listener.local_addr().expect("local addr");
+        let (tx, rx) = mpsc::channel();
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept local chat request");
+            let request = read_http_request(&mut stream);
+            tx.send(request).expect("send captured request");
+            let body = r#"{"choices":[{"message":{"content":"local ok"}}]}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .expect("write response");
+        });
+
+        (format!("http://{}/v1", addr), rx, handle)
+    }
+
+    fn read_http_request(stream: &mut std::net::TcpStream) -> String {
+        let mut bytes = Vec::new();
+        let mut buf = [0_u8; 1024];
+        loop {
+            let n = stream.read(&mut buf).expect("read request");
+            if n == 0 {
+                break;
+            }
+            bytes.extend_from_slice(&buf[..n]);
+            let request = String::from_utf8_lossy(&bytes);
+            if let Some(header_end) = request.find("\r\n\r\n") {
+                let content_len = content_length(&request[..header_end]).unwrap_or(0);
+                if bytes.len() >= header_end + 4 + content_len {
+                    break;
+                }
+            }
+        }
+        String::from_utf8(bytes).expect("utf8 request")
+    }
+
+    fn content_length(headers: &str) -> Option<usize> {
+        headers.lines().find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("content-length")
+                .then(|| value.trim().parse().ok())
+                .flatten()
+        })
     }
 
     #[test]
