@@ -73,8 +73,8 @@ fn oauth_preflight_mentions_manual_safe_callback_mode() {
 #[test]
 fn tui_openai_compatible_api_base_accepts_localhost_override() -> anyhow::Result<()> {
     with_temp_jcode_home(|| {
-        let resolved = save_tui_openai_compatible_api_base("http://localhost:11434/v1")?;
-        assert_eq!(resolved.api_base, "http://localhost:11434/v1");
+        let resolved = save_tui_openai_compatible_api_base("`http://localhost:20128/v1`")?;
+        assert_eq!(resolved.api_base, "http://localhost:20128/v1");
         assert!(!resolved.requires_api_key);
         Ok(())
     })

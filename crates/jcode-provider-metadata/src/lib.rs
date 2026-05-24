@@ -225,7 +225,7 @@ pub fn is_safe_env_file_name(name: &str) -> bool {
 }
 
 pub fn normalize_api_base(raw: &str) -> Option<String> {
-    let trimmed = raw.trim();
+    let trimmed = raw.trim().trim_matches('`').trim();
     if trimmed.is_empty() {
         return None;
     }
@@ -313,6 +313,14 @@ mod tests {
 
     #[test]
     fn normalize_api_base_accepts_private_http_hosts() {
+        assert_eq!(
+            normalize_api_base("http://localhost:20128/v1").as_deref(),
+            Some("http://localhost:20128/v1")
+        );
+        assert_eq!(
+            normalize_api_base("`http://localhost:20128/v1`").as_deref(),
+            Some("http://localhost:20128/v1")
+        );
         assert_eq!(
             normalize_api_base("http://192.168.1.25:8000/v1/").as_deref(),
             Some("http://192.168.1.25:8000/v1")
