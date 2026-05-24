@@ -11,6 +11,7 @@ pub const SOURCE_AGENT_SKILLS: &str = "agent-skills";
 pub const SOURCE_CODEX: &str = "codex";
 pub const SOURCE_CLAUDE: &str = "claude";
 pub const SOURCE_CURSOR: &str = "cursor";
+pub const SOURCE_CUSTOM_LOCAL: &str = "custom-local";
 
 pub const INVOCATION_IMPLICIT_AND_EXPLICIT: &str = "implicit-and-explicit";
 pub const INVOCATION_EXPLICIT_ONLY: &str = "explicit-only";
@@ -55,6 +56,11 @@ pub struct CanonicalSkillManifest {
     pub is_over_broad: bool,
     pub warnings: Vec<String>,
     pub search_text: String,
+    pub skills_sh_id: Option<String>,
+    pub skills_sh_url: Option<String>,
+    pub skills_sh_install_url: Option<String>,
+    pub skills_sh_audit: Option<String>,
+    pub quality_tier: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -144,7 +150,7 @@ impl CanonicalSkillManifest {
         let lifecycle_stages =
             yaml_string_list_any(input.frontmatter, &["lifecycle_stages", "lifecycle-stages"]);
         let capabilities = yaml_string_list_any(input.frontmatter, &["capabilities", "capability"]);
-        let allowed_agents =
+        let mut allowed_agents =
             yaml_string_list_any(input.frontmatter, &["allowed_agents", "allowed-agents"]);
         let denied_agents =
             yaml_string_list_any(input.frontmatter, &["denied_agents", "denied-agents"]);
@@ -153,6 +159,35 @@ impl CanonicalSkillManifest {
         let risk =
             yaml_string_any(input.frontmatter, &["risk"]).unwrap_or_else(|| "unknown".into());
         let trust_level = trust_for_source(&input.source_kind);
+        if input.source_kind == SOURCE_CUSTOM_LOCAL
+            && let Some(role) = crate::agent_workflow::custom_skill_role_for_root(&input.skill_root)
+            && !allowed_agents.iter().any(|agent| agent == &role)
+        {
+            allowed_agents.push(role);
+            sort_dedup(&mut allowed_agents);
+        }
+        let skills_sh_id = yaml_string_any(
+            input.frontmatter,
+            &["skills_sh_id", "skills-sh-id", "skills_id"],
+        );
+        let skills_sh_url = yaml_string_any(
+            input.frontmatter,
+            &["skills_sh_url", "skills-sh-url", "url"],
+        );
+        let skills_sh_install_url = yaml_string_any(
+            input.frontmatter,
+            &[
+                "skills_sh_install_url",
+                "skills-sh-install-url",
+                "install_url",
+            ],
+        );
+        let skills_sh_audit = yaml_string_any(
+            input.frontmatter,
+            &["skills_sh_audit", "skills-sh-audit", "audit"],
+        );
+        let quality_tier =
+            yaml_string_any(input.frontmatter, &["quality_tier", "quality-tier", "tier"]);
         let search_text = normalize_search_text(&format!(
             "{}\n{}\n{}\n{}\n{}",
             input.name,
@@ -220,6 +255,11 @@ impl CanonicalSkillManifest {
             is_over_broad,
             warnings,
             search_text,
+            skills_sh_id,
+            skills_sh_url,
+            skills_sh_install_url,
+            skills_sh_audit,
+            quality_tier,
         }
     }
 }
@@ -239,6 +279,12 @@ impl AgentProfile {
             max_skill_context_tokens: 4_000,
             max_single_skill_tokens: 5_000,
         }
+    }
+
+    pub fn for_role(id: impl Into<String>, role: impl Into<String>, all_tools: &[String]) -> Self {
+        let role = role.into();
+        let allowed = crate::agent_workflow::role_allowed_tools(&role, all_tools);
+        Self::from_allowed_tools(id, role, Some(&allowed))
     }
 
     fn allows_tool(&self, tool: &str) -> bool {
@@ -309,7 +355,7 @@ impl WorkspaceContext {
 }
 
 pub fn enabled() -> bool {
-    crate::config::config().features.per_agent_skill_router
+    crate::config::config().features.per_agent_skill_router || crate::agent_workflow::enabled()
 }
 
 pub fn latest_user_text(messages: &[Message]) -> Option<String> {
@@ -526,6 +572,8 @@ pub fn source_kind_for_root(root: &Path) -> &'static str {
     let text = root.display().to_string().replace('\\', "/");
     if text.contains("/.agents/skills") || text.ends_with(".agents/skills") {
         SOURCE_AGENT_SKILLS
+    } else if text.contains("/agent-skills/") || text.ends_with("/agent-skills") {
+        SOURCE_CUSTOM_LOCAL
     } else if text.contains("/.codex/skills") || text.ends_with(".codex/skills") {
         SOURCE_CODEX
     } else if text.contains("/.cursor/skills") || text.ends_with(".cursor/skills") {
@@ -639,6 +687,20 @@ fn hard_filter(
     let explicit = is_explicit_match(manifest, &intent.explicit_skills);
     if manifest.invocation_mode == INVOCATION_EXPLICIT_ONLY && !explicit {
         return Err("explicit-only".to_string());
+    }
+    if crate::agent_workflow::enabled()
+        && !explicit
+        && manifest.source_kind != SOURCE_CUSTOM_LOCAL
+        && !skills_sh_identity_present(manifest)
+    {
+        return Err("skills-sh-metadata-required".to_string());
+    }
+    if crate::agent_workflow::enabled()
+        && !explicit
+        && manifest.source_kind != SOURCE_CUSTOM_LOCAL
+        && !skills_sh_quality_allows_implicit(manifest)
+    {
+        return Err("skills-sh-quality-blocked".to_string());
     }
     if manifest
         .denied_agents
@@ -759,6 +821,27 @@ fn is_explicit_match(manifest: &CanonicalSkillManifest, explicit_skills: &[Strin
             || canonicalize_name(requested) == manifest.canonical_name
             || requested.eq_ignore_ascii_case(&manifest.name)
     })
+}
+
+fn skills_sh_identity_present(manifest: &CanonicalSkillManifest) -> bool {
+    manifest.skills_sh_id.is_some() || manifest.skills_sh_url.is_some()
+}
+
+fn skills_sh_quality_allows_implicit(manifest: &CanonicalSkillManifest) -> bool {
+    if let Some(tier) = manifest.quality_tier.as_deref() {
+        let tier = tier.trim().to_ascii_uppercase();
+        if tier == "S" || tier == "A" {
+            return true;
+        }
+    }
+    manifest
+        .skills_sh_audit
+        .as_deref()
+        .map(|audit| {
+            let audit = audit.trim().to_ascii_lowercase();
+            matches!(audit.as_str(), "pass" | "passed" | "ok" | "low" | "medium")
+        })
+        .unwrap_or(false)
 }
 
 fn path_scope_matches(manifest: &CanonicalSkillManifest, workspace: &WorkspaceContext) -> bool {
@@ -989,6 +1072,7 @@ fn sanitize_id_part(value: &str) -> String {
 fn trust_for_source(source_kind: &str) -> String {
     match source_kind {
         SOURCE_JCODE_NATIVE => "user",
+        SOURCE_CUSTOM_LOCAL => "user",
         SOURCE_AGENT_SKILLS | SOURCE_CODEX | SOURCE_CLAUDE | SOURCE_CURSOR => "workspace",
         _ => "unknown",
     }

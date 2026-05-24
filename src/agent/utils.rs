@@ -41,6 +41,18 @@ fn git_output(dir: &Path, args: &[&str]) -> Option<String> {
 }
 
 impl Agent {
+    pub(super) fn refresh_workflow_metadata_from_disk(&mut self) {
+        if !crate::agent_workflow::enabled() {
+            return;
+        }
+        let Ok(snapshot) = crate::session::Session::load(&self.session.id) else {
+            return;
+        };
+        self.session.agent_role = snapshot.agent_role;
+        self.session.workflow_task_id = snapshot.workflow_task_id;
+        self.session.agent_workflow_state = snapshot.agent_workflow_state;
+    }
+
     pub(super) fn update_generated_image_side_panel(
         &self,
         id: &str,

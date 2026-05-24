@@ -118,6 +118,16 @@ impl Agent {
             working_dir.as_deref(),
         );
 
+        if crate::agent_workflow::enabled() {
+            let role = crate::agent_workflow::effective_role(&self.session);
+            if !split.dynamic_part.is_empty() {
+                split.dynamic_part.push_str("\n\n");
+            }
+            split
+                .dynamic_part
+                .push_str(&crate::agent_workflow::workflow_prompt_for_role(&role));
+        }
+
         let route_messages = self
             .session
             .messages
@@ -128,9 +138,10 @@ impl Agent {
             && let Some(prompt_text) = crate::skill_router::latest_user_text(&route_messages)
         {
             let manifests = skills.manifests();
+            let role = crate::agent_workflow::effective_role(&self.session);
             let agent = crate::skill_router::AgentProfile::from_allowed_tools(
                 self.session.id.clone(),
-                "implementer",
+                role,
                 self.allowed_tools.as_ref(),
             );
             let routing = crate::skill_router::route_for_prompt(

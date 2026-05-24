@@ -40,6 +40,21 @@ fn test_skill_prompt_integration() {
 }
 
 #[test]
+fn test_agent_workflow_role_prompt_includes_shared_principles() {
+    let prompt =
+        crate::agent_workflow::workflow_prompt_for_role(crate::agent_workflow::ROLE_ORCHESTRATOR);
+    assert!(prompt.contains("Think Before Coding"));
+    assert!(prompt.contains("Simplicity First"));
+    assert!(prompt.contains("Surgical Changes"));
+    assert!(prompt.contains("Goal-Driven Execution"));
+    assert!(prompt.contains("needs_clarification"));
+    assert!(prompt.contains("understanding"));
+    assert!(prompt.contains("critique"));
+    assert!(prompt.contains("simpler_option"));
+    assert!(prompt.contains("accept_or_rework"));
+}
+
+#[test]
 fn test_load_agents_md_files_uses_sandboxed_global_files() {
     let _guard = crate::storage::lock_test_env();
     let prev_home = std::env::var_os("JCODE_HOME");

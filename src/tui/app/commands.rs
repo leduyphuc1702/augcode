@@ -645,6 +645,7 @@ fn launch_manual_subagent(app: &mut App, spec: ManualSubagentSpec) {
     let registry = app.registry.clone();
     let session_id = app.session.id.clone();
     let working_dir = app.session.working_dir.clone();
+    let agent_role = app.session.agent_role.clone();
     let tool_call_for_task = tool_call.clone();
     tokio::spawn(async move {
         Bus::global().publish(BusEvent::ToolUpdated(ToolEvent {
@@ -662,6 +663,7 @@ fn launch_manual_subagent(app: &mut App, spec: ManualSubagentSpec) {
             tool_call_id: tool_call_for_task.id.clone(),
             working_dir: working_dir.as_deref().map(PathBuf::from),
             allowed_tools: None,
+            agent_role,
             stdin_request_tx: None,
             graceful_shutdown_signal: None,
             execution_mode: crate::tool::ToolExecutionMode::Direct,
@@ -1427,7 +1429,8 @@ pub(super) fn handle_git_status_completed(app: &mut App, completed: GitStatusCom
 }
 
 pub(super) fn handle_session_command(app: &mut App, trimmed: &str) -> bool {
-    if handle_subagent_model_command(app, trimmed)
+    if handle_agent_workflow_command(app, trimmed)
+        || handle_subagent_model_command(app, trimmed)
         || handle_subagent_command(app, trimmed)
         || handle_observe_command(app, trimmed)
         || handle_todos_view_command(app, trimmed)
@@ -1827,6 +1830,33 @@ pub(super) fn handle_session_command(app: &mut App, trimmed: &str) -> bool {
     }
 
     false
+}
+
+fn handle_agent_workflow_command(app: &mut App, trimmed: &str) -> bool {
+    let is_workflow_command = trimmed == "/approve-plan"
+        || trimmed.starts_with("/reject-plan")
+        || trimmed == "/approve-review"
+        || trimmed.starts_with("/reject-review")
+        || trimmed.starts_with("/approve-skill");
+    if !is_workflow_command {
+        return false;
+    }
+    if !crate::agent_workflow::enabled() && !trimmed.starts_with("/approve-skill") {
+        app.push_display_message(DisplayMessage::error(
+            "agent_workflow is disabled.".to_string(),
+        ));
+        return true;
+    }
+    match crate::agent_workflow::workflow_command(trimmed, &mut app.session) {
+        Some(message) => {
+            app.push_display_message(DisplayMessage::system(message));
+            app.set_status_notice("Workflow updated");
+        }
+        None => app.push_display_message(DisplayMessage::error(
+            "Unknown workflow command.".to_string(),
+        )),
+    }
+    true
 }
 
 fn handle_selfdev_command(app: &mut App, trimmed: &str) -> bool {

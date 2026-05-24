@@ -1,3 +1,4 @@
+mod agent_workflow;
 mod agentgrep;
 pub mod ambient;
 mod apply_patch;
@@ -225,6 +226,12 @@ impl Registry {
             );
             Self::insert_tool_timed(&mut m, &mut timings, "memory", memory::MemoryTool::new);
             Self::insert_tool_timed(&mut m, &mut timings, "goal", goal::GoalTool::new);
+            Self::insert_tool_timed(
+                &mut m,
+                &mut timings,
+                "agent_workflow",
+                agent_workflow::AgentWorkflowTool::new,
+            );
             Self::insert_tool_timed(&mut m, &mut timings, "gmail", gmail::GmailTool::new);
             Self::insert_tool_timed(&mut m, &mut timings, "schedule", ambient::ScheduleTool::new);
             Self::insert_tool_timed(&mut m, &mut timings, "selfdev", selfdev::SelfDevTool::new);

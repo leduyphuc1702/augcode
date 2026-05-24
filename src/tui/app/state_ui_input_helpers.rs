@@ -47,6 +47,11 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     RegisteredCommand::public("/refresh-model-list", "Refresh provider model catalogs"),
     RegisteredCommand::public("/agents", "Configure models for agent roles"),
     RegisteredCommand::public("/subagent", "Launch a subagent manually"),
+    RegisteredCommand::public("/approve-plan", "Approve the workflow plan gate"),
+    RegisteredCommand::public("/reject-plan", "Reject the workflow plan gate"),
+    RegisteredCommand::public("/approve-review", "Approve the workflow review gate"),
+    RegisteredCommand::public("/reject-review", "Reject the workflow review gate"),
+    RegisteredCommand::public("/approve-skill", "Approve one remote skills.sh read"),
     RegisteredCommand::public("/observe", "Show the latest tool context in the side panel"),
     RegisteredCommand::public(
         "/todos",

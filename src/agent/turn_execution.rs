@@ -3,6 +3,7 @@ use super::*;
 impl Agent {
     /// Run a single turn with the given user message
     pub async fn run_once(&mut self, user_message: &str) -> Result<()> {
+        crate::agent_workflow::ensure_orchestrator_front_door(&mut self.session);
         self.add_message(
             Role::User,
             vec![ContentBlock::Text {
@@ -19,6 +20,7 @@ impl Agent {
     }
 
     pub async fn run_once_capture(&mut self, user_message: &str) -> Result<String> {
+        crate::agent_workflow::ensure_orchestrator_front_door(&mut self.session);
         self.add_message(
             Role::User,
             vec![ContentBlock::Text {
@@ -39,6 +41,7 @@ impl Agent {
         user_message: &str,
         event_tx: broadcast::Sender<ServerEvent>,
     ) -> Result<()> {
+        crate::agent_workflow::ensure_orchestrator_front_door(&mut self.session);
         // Inject any pending notifications before the user message
         let alerts = self.take_alerts();
         if !alerts.is_empty() {
@@ -75,6 +78,7 @@ impl Agent {
         system_reminder: Option<String>,
         event_tx: mpsc::UnboundedSender<ServerEvent>,
     ) -> Result<()> {
+        crate::agent_workflow::ensure_orchestrator_front_door(&mut self.session);
         // Inject any pending notifications before the user message
         let alerts = self.take_alerts();
         if !alerts.is_empty() {
@@ -138,6 +142,7 @@ impl Agent {
         new_session.testing_build = preserve_testing_build;
         new_session.is_debug = preserve_debug;
         new_session.working_dir = preserve_working_dir;
+        crate::agent_workflow::ensure_orchestrator_front_door(&mut new_session);
         new_session.ensure_initial_session_context_message();
 
         self.session = new_session;
@@ -286,6 +291,15 @@ impl Agent {
         }
 
         let mut tools = self.registry.definitions(self.allowed_tools.as_ref()).await;
+        if crate::agent_workflow::enabled() {
+            let role = crate::agent_workflow::effective_role(&self.session);
+            let all_names = tools
+                .iter()
+                .map(|tool| tool.name.clone())
+                .collect::<Vec<_>>();
+            let allowed = crate::agent_workflow::role_allowed_tools(&role, &all_names);
+            tools.retain(|tool| allowed.contains(&tool.name));
+        }
         if !self.session.is_canary {
             tools.retain(|tool| tool.name != "selfdev");
         }
@@ -310,6 +324,15 @@ impl Agent {
             self.registry.register_selfdev_tools().await;
         }
         let mut tools = self.registry.definitions(self.allowed_tools.as_ref()).await;
+        if crate::agent_workflow::enabled() {
+            let role = crate::agent_workflow::effective_role(&self.session);
+            let all_names = tools
+                .iter()
+                .map(|tool| tool.name.clone())
+                .collect::<Vec<_>>();
+            let allowed = crate::agent_workflow::role_allowed_tools(&role, &all_names);
+            tools.retain(|tool| allowed.contains(&tool.name));
+        }
         if !self.session.is_canary {
             tools.retain(|tool| tool.name != "selfdev");
         }
@@ -333,6 +356,7 @@ impl Agent {
             tool_call_id: call_id,
             working_dir: self.working_dir().map(PathBuf::from),
             allowed_tools: self.allowed_tools.clone(),
+            agent_role: self.session.agent_role.clone(),
             stdin_request_tx: self.stdin_request_tx.clone(),
             graceful_shutdown_signal: Some(self.graceful_shutdown.clone()),
             execution_mode: ToolExecutionMode::Direct,
@@ -390,8 +414,23 @@ impl Agent {
     }
 
     pub(super) fn validate_tool_allowed(&self, name: &str) -> Result<()> {
+        if crate::agent_workflow::enabled() {
+            let locked_names = self.locked_tools.as_ref().map(|locked| {
+                locked
+                    .iter()
+                    .map(|tool| tool.name.clone())
+                    .collect::<HashSet<_>>()
+            });
+            crate::agent_workflow::validate_tool_for_role(
+                &self.session,
+                name,
+                locked_names.as_ref(),
+            )
+            .map_err(anyhow::Error::msg)?;
+        }
         if let Some(allowed) = self.allowed_tools.as_ref()
             && !allowed.contains(name)
+            && !allowed.contains(crate::agent_workflow::canonical_tool_name(name))
         {
             return Err(anyhow::anyhow!("Tool '{}' is not allowed", name));
         }

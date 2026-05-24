@@ -1,3 +1,4 @@
+use crate::agent_workflow::AgentWorkflowState;
 use crate::id::{extract_session_name, new_id, new_memorable_session_id};
 use crate::message::{ContentBlock, Message, Role};
 use crate::storage;
@@ -90,6 +91,15 @@ pub struct Session {
     /// Optional fixed model to use for subagents launched from this session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagent_model: Option<String>,
+    /// Agent workflow role for session-per-agent execution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_role: Option<String>,
+    /// Workflow task id owned by this child session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_task_id: Option<String>,
+    /// Orchestrator workflow state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_workflow_state: Option<AgentWorkflowState>,
     /// Last requested `/improve` mode for this session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub improve_mode: Option<SessionImproveMode>,
@@ -177,6 +187,12 @@ struct SessionStartupStub {
     reasoning_effort: Option<String>,
     #[serde(default)]
     subagent_model: Option<String>,
+    #[serde(default)]
+    agent_role: Option<String>,
+    #[serde(default)]
+    workflow_task_id: Option<String>,
+    #[serde(default)]
+    agent_workflow_state: Option<AgentWorkflowState>,
     #[serde(default)]
     improve_mode: Option<SessionImproveMode>,
     #[serde(default)]
@@ -283,6 +299,9 @@ impl Session {
         session.model = stub.model;
         session.reasoning_effort = stub.reasoning_effort;
         session.subagent_model = stub.subagent_model;
+        session.agent_role = stub.agent_role;
+        session.workflow_task_id = stub.workflow_task_id;
+        session.agent_workflow_state = stub.agent_workflow_state;
         session.improve_mode = stub.improve_mode;
         session.autoreview_enabled = stub.autoreview_enabled;
         session.autojudge_enabled = stub.autojudge_enabled;
@@ -317,6 +336,9 @@ impl Session {
         session.model = snapshot.model;
         session.reasoning_effort = snapshot.reasoning_effort;
         session.subagent_model = snapshot.subagent_model;
+        session.agent_role = snapshot.agent_role;
+        session.workflow_task_id = snapshot.workflow_task_id;
+        session.agent_workflow_state = snapshot.agent_workflow_state;
         session.improve_mode = snapshot.improve_mode;
         session.autoreview_enabled = snapshot.autoreview_enabled;
         session.autojudge_enabled = snapshot.autojudge_enabled;
@@ -454,6 +476,9 @@ impl Session {
             model: self.model.clone(),
             reasoning_effort: self.reasoning_effort.clone(),
             subagent_model: self.subagent_model.clone(),
+            agent_role: self.agent_role.clone(),
+            workflow_task_id: self.workflow_task_id.clone(),
+            agent_workflow_state: self.agent_workflow_state.clone(),
             improve_mode: self.improve_mode,
             autoreview_enabled: self.autoreview_enabled,
             autojudge_enabled: self.autojudge_enabled,
@@ -638,6 +663,9 @@ impl Session {
         self.model = meta.model;
         self.reasoning_effort = meta.reasoning_effort;
         self.subagent_model = meta.subagent_model;
+        self.agent_role = meta.agent_role;
+        self.workflow_task_id = meta.workflow_task_id;
+        self.agent_workflow_state = meta.agent_workflow_state;
         self.improve_mode = meta.improve_mode;
         self.autoreview_enabled = meta.autoreview_enabled;
         self.autojudge_enabled = meta.autojudge_enabled;
@@ -677,6 +705,9 @@ impl Session {
             model: None,
             reasoning_effort: None,
             subagent_model: None,
+            agent_role: None,
+            workflow_task_id: None,
+            agent_workflow_state: None,
             improve_mode: None,
             autoreview_enabled: None,
             autojudge_enabled: None,
@@ -723,6 +754,9 @@ impl Session {
             model: None,
             reasoning_effort: None,
             subagent_model: None,
+            agent_role: None,
+            workflow_task_id: None,
+            agent_workflow_state: None,
             improve_mode: None,
             autoreview_enabled: None,
             autojudge_enabled: None,
@@ -1393,6 +1427,12 @@ struct RemoteStartupSessionSnapshot {
     reasoning_effort: Option<String>,
     #[serde(default)]
     subagent_model: Option<String>,
+    #[serde(default)]
+    agent_role: Option<String>,
+    #[serde(default)]
+    workflow_task_id: Option<String>,
+    #[serde(default)]
+    agent_workflow_state: Option<AgentWorkflowState>,
     #[serde(default)]
     improve_mode: Option<SessionImproveMode>,
     #[serde(default)]

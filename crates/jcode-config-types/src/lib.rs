@@ -595,7 +595,7 @@ pub struct FeatureConfig {
     pub memory: bool,
     /// Enable swarm coordination features (default: true)
     pub swarm: bool,
-    /// Enable agent workflow UI/coordination features (default: true)
+    /// Enable agent-orchestrators workflow contract (default: true)
     pub agent_workflow: bool,
     /// Inject timestamps into user messages and tool results sent to the model (default: true)
     pub message_timestamps: bool,
@@ -617,6 +617,47 @@ impl Default for FeatureConfig {
             codebase_sync: true,
             per_agent_skill_router: false,
             update_channel: UpdateChannel::default(),
+        }
+    }
+}
+
+/// Skill routing policy knobs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SkillsConfig {
+    /// Allow user/workspace copied custom skills under agent-skills/<role>.
+    pub allow_custom_local: bool,
+    /// Remote skill body policy. MVP supports "approve".
+    pub remote_read_policy: String,
+    /// Minimum marketplace tier for implicit routing.
+    pub marketplace_min_tier: String,
+}
+
+impl Default for SkillsConfig {
+    fn default() -> Self {
+        Self {
+            allow_custom_local: true,
+            remote_read_policy: "approve".to_string(),
+            marketplace_min_tier: "A".to_string(),
+        }
+    }
+}
+
+/// Agent workflow policy knobs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WorkflowConfig {
+    /// Start background compaction around this fraction of context usage.
+    pub orchestrator_context_soft_pct: f32,
+    /// Hard compact/block around this fraction of context usage.
+    pub orchestrator_context_hard_pct: f32,
+}
+
+impl Default for WorkflowConfig {
+    fn default() -> Self {
+        Self {
+            orchestrator_context_soft_pct: 0.80,
+            orchestrator_context_hard_pct: 0.95,
         }
     }
 }

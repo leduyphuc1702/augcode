@@ -43,6 +43,16 @@ fn per_agent_skill_router_defaults_off() {
 }
 
 #[test]
+fn agent_workflow_defaults_to_agent_orchestrators_contract() {
+    let cfg = Config::default();
+    assert!(cfg.features.agent_workflow);
+    assert!(cfg.skills.allow_custom_local);
+    assert_eq!(cfg.skills.remote_read_policy, "approve");
+    assert_eq!(cfg.workflow.orchestrator_context_soft_pct, 0.80);
+    assert_eq!(cfg.workflow.orchestrator_context_hard_pct, 0.95);
+}
+
+#[test]
 fn swarm_spawn_mode_parses_supported_values() {
     let cfg: Config = toml::from_str("[agents]\nswarm_spawn_mode = \"headless\"\n")
         .expect("headless swarm_spawn_mode should parse");
@@ -333,6 +343,37 @@ fn test_env_override_per_agent_skill_router() {
 
     assert!(cfg.features.per_agent_skill_router);
     restore_env_var("JCODE_PER_AGENT_SKILL_ROUTER_ENABLED", prev);
+}
+
+#[test]
+fn test_env_override_agent_workflow_policy() {
+    let _guard = crate::storage::lock_test_env();
+    let prev_enabled = std::env::var_os("JCODE_AGENT_WORKFLOW_ENABLED");
+    let prev_custom = std::env::var_os("JCODE_SKILLS_ALLOW_CUSTOM_LOCAL");
+    let prev_policy = std::env::var_os("JCODE_SKILLS_REMOTE_READ_POLICY");
+    let prev_soft = std::env::var_os("JCODE_WORKFLOW_CONTEXT_SOFT_PCT");
+    let prev_hard = std::env::var_os("JCODE_WORKFLOW_CONTEXT_HARD_PCT");
+
+    crate::env::set_var("JCODE_AGENT_WORKFLOW_ENABLED", "true");
+    crate::env::set_var("JCODE_SKILLS_ALLOW_CUSTOM_LOCAL", "false");
+    crate::env::set_var("JCODE_SKILLS_REMOTE_READ_POLICY", "never");
+    crate::env::set_var("JCODE_WORKFLOW_CONTEXT_SOFT_PCT", "0.70");
+    crate::env::set_var("JCODE_WORKFLOW_CONTEXT_HARD_PCT", "0.90");
+
+    let mut cfg = Config::default();
+    cfg.apply_env_overrides();
+
+    assert!(cfg.features.agent_workflow);
+    assert!(!cfg.skills.allow_custom_local);
+    assert_eq!(cfg.skills.remote_read_policy, "never");
+    assert_eq!(cfg.workflow.orchestrator_context_soft_pct, 0.70);
+    assert_eq!(cfg.workflow.orchestrator_context_hard_pct, 0.90);
+
+    restore_env_var("JCODE_AGENT_WORKFLOW_ENABLED", prev_enabled);
+    restore_env_var("JCODE_SKILLS_ALLOW_CUSTOM_LOCAL", prev_custom);
+    restore_env_var("JCODE_SKILLS_REMOTE_READ_POLICY", prev_policy);
+    restore_env_var("JCODE_WORKFLOW_CONTEXT_SOFT_PCT", prev_soft);
+    restore_env_var("JCODE_WORKFLOW_CONTEXT_HARD_PCT", prev_hard);
 }
 
 #[test]

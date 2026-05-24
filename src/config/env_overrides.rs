@@ -238,6 +238,37 @@ impl Config {
             }
         }
 
+        // Skills
+        if let Ok(v) = std::env::var("JCODE_SKILLS_ALLOW_CUSTOM_LOCAL") {
+            if let Some(parsed) = parse_env_bool(&v) {
+                self.skills.allow_custom_local = parsed;
+            }
+        }
+        if let Ok(v) = std::env::var("JCODE_SKILLS_REMOTE_READ_POLICY") {
+            let trimmed = v.trim();
+            if !trimmed.is_empty() {
+                self.skills.remote_read_policy = trimmed.to_string();
+            }
+        }
+        if let Ok(v) = std::env::var("JCODE_SKILLS_MARKETPLACE_MIN_TIER") {
+            let trimmed = v.trim();
+            if !trimmed.is_empty() {
+                self.skills.marketplace_min_tier = trimmed.to_string();
+            }
+        }
+
+        // Workflow
+        if let Ok(v) = std::env::var("JCODE_WORKFLOW_CONTEXT_SOFT_PCT")
+            && let Ok(parsed) = v.trim().parse::<f32>()
+        {
+            self.workflow.orchestrator_context_soft_pct = parsed.clamp(0.10, 0.99);
+        }
+        if let Ok(v) = std::env::var("JCODE_WORKFLOW_CONTEXT_HARD_PCT")
+            && let Ok(parsed) = v.trim().parse::<f32>()
+        {
+            self.workflow.orchestrator_context_hard_pct = parsed.clamp(0.10, 0.99);
+        }
+
         // Web search
         if let Ok(v) = std::env::var("JCODE_WEBSEARCH_ENGINE")
             && let Some(engine) = WebSearchEngine::parse(&v)
