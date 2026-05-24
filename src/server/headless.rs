@@ -35,7 +35,8 @@ pub(super) async fn create_headless_session(
     report_back_to_session_id: Option<String>,
 ) -> Result<String> {
     let memory_enabled = crate::config::config().features.memory;
-    let swarm_enabled = crate::config::config().features.swarm;
+    let features = &crate::config::config().features;
+    let swarm_enabled = features.swarm && features.agent_workflow;
 
     let working_dir = if let Some(path_str) = command.strip_prefix("create_session:") {
         let path_str = path_str.trim();

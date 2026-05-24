@@ -158,10 +158,12 @@ impl App {
 
         // Send context to memory agent for the NEXT turn (doesn't block current send)
         let shared_messages: std::sync::Arc<[crate::message::Message]> = messages.to_vec().into();
-        crate::memory_agent::update_context_sync_with_dir(
+        crate::memory_agent::update_context_sync_with_runtime(
             &self.session.id,
             shared_messages,
             self.session.working_dir.clone(),
+            self.provider.name().to_string(),
+            self.provider.model(),
         );
 
         // Return pending memory from previous turn
@@ -244,7 +246,10 @@ impl App {
             .filter(|e| e.active)
             .map(|e| e.content)
             .collect();
-        let sidecar = crate::sidecar::Sidecar::new();
+        let sidecar = crate::sidecar::Sidecar::for_provider_model(
+            self.provider.name(),
+            &self.provider.model(),
+        );
         match sidecar
             .extract_memories_with_existing(&transcript, &existing)
             .await

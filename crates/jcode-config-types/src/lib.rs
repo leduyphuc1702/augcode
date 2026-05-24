@@ -595,6 +595,8 @@ pub struct FeatureConfig {
     pub memory: bool,
     /// Enable swarm coordination features (default: true)
     pub swarm: bool,
+    /// Enable agent workflow UI/coordination features (default: true)
+    pub agent_workflow: bool,
     /// Inject timestamps into user messages and tool results sent to the model (default: true)
     pub message_timestamps: bool,
     /// Enable local codebase auto-sync and provider-neutral context injection (default: true)
@@ -610,6 +612,7 @@ impl Default for FeatureConfig {
         Self {
             memory: true,
             swarm: true,
+            agent_workflow: true,
             message_timestamps: true,
             codebase_sync: true,
             per_agent_skill_router: false,

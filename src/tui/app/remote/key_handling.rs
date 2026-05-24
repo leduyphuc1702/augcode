@@ -1469,7 +1469,8 @@ async fn handle_remote_key_internal(
                 }
 
                 if trimmed == "/swarm" || trimmed == "/swarm status" {
-                    let default_enabled = crate::config::config().features.swarm;
+                    let features = &crate::config::config().features;
+                    let default_enabled = features.swarm && features.agent_workflow;
                     app.push_display_message(DisplayMessage::system(format!(
                         "Swarm feature: **{}** (config default: {})",
                         if app.swarm_enabled {

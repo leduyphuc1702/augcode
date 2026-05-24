@@ -441,10 +441,12 @@ impl App {
         }
 
         let transcript = crate::memory_agent::build_transcript_for_extraction(&provider_messages);
-        crate::memory_agent::trigger_final_extraction_with_dir(
+        crate::memory_agent::trigger_final_extraction_with_provider_model(
             transcript,
             self.session.id.clone(),
             self.session.working_dir.clone(),
+            self.provider.name().to_string(),
+            self.provider.model(),
         );
     }
 

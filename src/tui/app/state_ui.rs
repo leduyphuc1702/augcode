@@ -1341,9 +1341,14 @@ pub(super) fn handle_info_command(app: &mut App, trimmed: &str) -> bool {
         info.push_str(&format!("**Terminal:** {}\n", terminal_size));
         info.push_str(&format!("**CWD:** {}\n", cwd));
         info.push_str(&format!(
-            "**Features:** memory={}, swarm={}\n",
+            "**Features:** memory={}, swarm={}, agent_workflow={}\n",
             if app.memory_enabled { "on" } else { "off" },
-            if app.swarm_enabled { "on" } else { "off" }
+            if app.swarm_enabled { "on" } else { "off" },
+            if crate::config::config().features.agent_workflow {
+                "on"
+            } else {
+                "off"
+            }
         ));
 
         if let Some(ref model) = app.remote_provider_model {

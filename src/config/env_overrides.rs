@@ -206,6 +206,11 @@ impl Config {
                 self.features.swarm = parsed;
             }
         }
+        if let Ok(v) = std::env::var("JCODE_AGENT_WORKFLOW_ENABLED") {
+            if let Some(parsed) = parse_env_bool(&v) {
+                self.features.agent_workflow = parsed;
+            }
+        }
         if let Ok(v) = std::env::var("JCODE_MESSAGE_TIMESTAMPS") {
             if let Some(parsed) = parse_env_bool(&v) {
                 self.features.message_timestamps = parsed;

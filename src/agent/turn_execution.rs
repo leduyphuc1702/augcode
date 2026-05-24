@@ -706,7 +706,10 @@ impl Agent {
         }
 
         // Extract using sidecar
-        let sidecar = crate::sidecar::Sidecar::new();
+        let sidecar = crate::sidecar::Sidecar::for_provider_model(
+            self.provider.name(),
+            &self.provider.model(),
+        );
         match sidecar.extract_memories(&transcript).await {
             Ok(extracted) if !extracted.is_empty() => {
                 let manager = self

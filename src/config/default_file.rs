@@ -142,6 +142,8 @@ prompt_entry_animation = true
 memory = true
 # Swarm: multi-session coordination features
 swarm = true
+# Agent workflow UI and coordination affordances
+agent_workflow = true
 # Inject timestamps into user messages and tool results sent to the model
 message_timestamps = true
 # Auto-sync local codebase indexes and inject relevant code context

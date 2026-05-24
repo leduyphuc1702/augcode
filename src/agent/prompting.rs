@@ -38,10 +38,12 @@ impl Agent {
         // Running both this and the legacy MemoryManager background retrieval path
         // can prepare overlapping pending prompts for the same turn, which makes
         // memory injection feel overly aggressive.
-        crate::memory_agent::update_context_sync_with_dir(
+        crate::memory_agent::update_context_sync_with_runtime(
             session_id,
             messages,
             self.session.working_dir.clone(),
+            self.provider.name().to_string(),
+            self.provider.model(),
         );
 
         pending

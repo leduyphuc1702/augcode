@@ -118,14 +118,19 @@ fn manager_for_working_dir(working_dir: Option<&str>) -> MemoryManager {
     }
 }
 
-async fn run_final_extraction(transcript: String, session_id: String, working_dir: Option<String>) {
+async fn run_final_extraction(
+    transcript: String,
+    session_id: String,
+    working_dir: Option<String>,
+    sidecar: Option<Sidecar>,
+) {
     crate::logging::info(&format!(
         "Final extraction starting for session {} ({} chars)",
         session_id,
         transcript.len()
     ));
 
-    let sidecar = crate::sidecar::Sidecar::new();
+    let sidecar = sidecar.unwrap_or_else(crate::sidecar::Sidecar::new);
     let manager = manager_for_working_dir(working_dir.as_deref());
 
     let existing: Vec<String> = manager
@@ -212,10 +217,24 @@ impl MemoryAgentHandle {
         messages: Arc<[crate::message::Message]>,
         working_dir: Option<String>,
     ) {
+        self.update_context_sync_with_runtime(session_id, messages, working_dir, None);
+    }
+
+    pub fn update_context_sync_with_runtime(
+        &self,
+        session_id: &str,
+        messages: Arc<[crate::message::Message]>,
+        working_dir: Option<String>,
+        runtime_model: Option<(String, String)>,
+    ) {
+        let sidecar = runtime_model.as_ref().and_then(|(provider, model)| {
+            memory::memory_sidecar_enabled().then(|| Sidecar::for_provider_model(provider, model))
+        });
         let msg = AgentMessage::Context {
             session_id: session_id.to_string(),
             messages,
             working_dir,
+            sidecar,
             timestamp: Instant::now(),
         };
         let _ = self.tx.try_send(msg);
@@ -233,6 +252,7 @@ enum AgentMessage {
         session_id: String,
         messages: Arc<[crate::message::Message]>,
         working_dir: Option<String>,
+        sidecar: Option<Sidecar>,
         timestamp: Instant,
     },
     Reset,
@@ -290,6 +310,8 @@ struct SessionState {
     turn_count: usize,
     /// Turn count since last extraction for this session
     turns_since_extraction: usize,
+    /// Runtime model sidecar for this session.
+    sidecar: Option<Sidecar>,
 }
 
 /// The persistent memory agent state
@@ -342,6 +364,13 @@ impl MemoryAgent {
         manager_for_working_dir(working_dir)
     }
 
+    fn sidecar_for_session(&self, session_id: &str) -> Option<Sidecar> {
+        self.sessions
+            .get(session_id)
+            .and_then(|state| state.sidecar.clone())
+            .or_else(|| self.sidecar.clone())
+    }
+
     /// Run the memory agent loop
     async fn run(mut self) {
         crate::logging::info("Memory agent started");
@@ -355,12 +384,16 @@ impl MemoryAgent {
                     session_id,
                     messages,
                     working_dir,
+                    sidecar,
                     timestamp,
                 } => {
                     {
                         let ss = self.session_state(&session_id);
                         if working_dir.is_some() {
                             ss.working_dir = working_dir;
+                        }
+                        if sidecar.is_some() {
+                            ss.sidecar = sidecar;
                         }
                         ss.turn_count += 1;
                     }
@@ -654,7 +687,7 @@ impl MemoryAgent {
                 .collect());
         }
 
-        let Some(sidecar) = self.sidecar.clone() else {
+        let Some(sidecar) = self.sidecar_for_session(session_id) else {
             return Ok(Vec::new());
         };
 
@@ -744,7 +777,7 @@ impl MemoryAgent {
             reason: reason.to_string(),
         });
 
-        let Some(sidecar) = self.sidecar.clone() else {
+        let Some(sidecar) = self.sidecar_for_session(session_id) else {
             crate::logging::info(&format!(
                 "Incremental extraction skipped for session {}: sidecar unavailable",
                 session_id
@@ -1617,13 +1650,37 @@ pub fn update_context_sync_with_dir(
     messages: Arc<[crate::message::Message]>,
     working_dir: Option<String>,
 ) {
+    update_context_sync_with_runtime_inner(session_id, messages, working_dir, None);
+}
+
+pub fn update_context_sync_with_runtime(
+    session_id: &str,
+    messages: Arc<[crate::message::Message]>,
+    working_dir: Option<String>,
+    provider_name: String,
+    model: String,
+) {
+    update_context_sync_with_runtime_inner(
+        session_id,
+        messages,
+        working_dir,
+        Some((provider_name, model)),
+    );
+}
+
+fn update_context_sync_with_runtime_inner(
+    session_id: &str,
+    messages: Arc<[crate::message::Message]>,
+    working_dir: Option<String>,
+    runtime_model: Option<(String, String)>,
+) {
     if let Some(handle) = get() {
-        handle.update_context_sync_with_dir(session_id, messages, working_dir);
+        handle.update_context_sync_with_runtime(session_id, messages, working_dir, runtime_model);
     } else {
         let sid = session_id.to_string();
         tokio::spawn(async move {
             if let Ok(handle) = init().await {
-                handle.update_context_sync_with_dir(&sid, messages, working_dir);
+                handle.update_context_sync_with_runtime(&sid, messages, working_dir, runtime_model);
             }
         });
     }
@@ -1650,23 +1707,58 @@ pub fn trigger_final_extraction_with_dir(
     session_id: String,
     working_dir: Option<String>,
 ) {
+    trigger_final_extraction_with_runtime(transcript, session_id, working_dir, None);
+}
+
+pub fn trigger_final_extraction_with_provider_model(
+    transcript: String,
+    session_id: String,
+    working_dir: Option<String>,
+    provider_name: String,
+    model: String,
+) {
+    trigger_final_extraction_with_runtime(
+        transcript,
+        session_id,
+        working_dir,
+        Some((provider_name, model)),
+    );
+}
+
+fn trigger_final_extraction_with_runtime(
+    transcript: String,
+    session_id: String,
+    working_dir: Option<String>,
+    runtime_model: Option<(String, String)>,
+) {
     if transcript.len() < 200 {
         return;
     }
 
     crate::memory_log::log_final_extraction(&session_id, transcript.len());
+    let sidecar = runtime_model.as_ref().and_then(|(provider, model)| {
+        memory::memory_sidecar_enabled().then(|| Sidecar::for_provider_model(provider, model))
+    });
 
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        handle.spawn(run_final_extraction(transcript, session_id, working_dir));
+        handle.spawn(run_final_extraction(
+            transcript,
+            session_id,
+            working_dir,
+            sidecar,
+        ));
     } else {
         std::thread::spawn(move || {
             match tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
             {
-                Ok(runtime) => {
-                    runtime.block_on(run_final_extraction(transcript, session_id, working_dir))
-                }
+                Ok(runtime) => runtime.block_on(run_final_extraction(
+                    transcript,
+                    session_id,
+                    working_dir,
+                    sidecar,
+                )),
                 Err(err) => crate::logging::info(&format!(
                     "Final extraction runtime startup failed: {}",
                     err

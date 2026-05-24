@@ -11,6 +11,9 @@ const CONTEXT_VIEW_TITLE: &str = "Context";
 
 impl App {
     pub(super) fn ensure_workflow_side_panel_pages(&mut self, focus_context: bool) {
+        if !crate::config::config().features.agent_workflow {
+            return;
+        }
         self.todos_view_enabled = true;
         self.context_view_enabled = true;
         self.refresh_todos_view_now();
@@ -37,13 +40,17 @@ impl App {
         snapshot
             .pages
             .retain(|page| page.id != CONTEXT_VIEW_PAGE_ID);
-        snapshot.pages.push(self.context_view_page());
-        snapshot.pages.sort_by(|a, b| {
-            b.updated_at_ms
-                .cmp(&a.updated_at_ms)
-                .then_with(|| a.id.cmp(&b.id))
-        });
-        if focus_context || snapshot.focused_page_id.is_none() {
+        let page = self.context_view_page();
+        if let Some(todos_idx) = snapshot
+            .pages
+            .iter()
+            .position(|page| page.id == super::todos_view::TODOS_VIEW_PAGE_ID)
+        {
+            snapshot.pages.insert(todos_idx + 1, page);
+        } else {
+            snapshot.pages.push(page);
+        }
+        if focus_context {
             snapshot.focused_page_id = Some(CONTEXT_VIEW_PAGE_ID.to_string());
         }
         snapshot
@@ -193,9 +200,14 @@ pub(super) fn build_context_report(app: &App) -> String {
     report.push_str(&format!("- cwd: {}\n", cwd));
     report.push_str(&format!("- terminal: {}\n", terminal_size));
     report.push_str(&format!(
-        "- features: memory={}, swarm={}\n",
+        "- features: memory={}, swarm={}, agent_workflow={}\n",
         if app.memory_enabled { "on" } else { "off" },
-        if app.swarm_enabled { "on" } else { "off" }
+        if app.swarm_enabled { "on" } else { "off" },
+        if crate::config::config().features.agent_workflow {
+            "on"
+        } else {
+            "off"
+        }
     ));
     report.push_str(&format!("- processing: {}\n", processing));
     if let Some((input, output)) = total_tokens {
@@ -302,6 +314,65 @@ mod tests {
         assert_eq!(
             app.side_panel.focused_page_id.as_deref(),
             Some(CONTEXT_VIEW_PAGE_ID)
+        );
+    }
+
+    #[test]
+    fn workflow_pages_without_focus_preserve_existing_focus() {
+        let mut app = App::new_for_remote(Some("session-test".to_string()));
+        app.side_panel.pages.push(SidePanelPage {
+            id: "existing".to_string(),
+            title: "Existing".to_string(),
+            file_path: "existing://page".to_string(),
+            format: SidePanelPageFormat::Markdown,
+            source: SidePanelPageSource::Ephemeral,
+            content: "Existing".to_string(),
+            updated_at_ms: 1,
+        });
+        app.side_panel.focused_page_id = Some("existing".to_string());
+
+        app.ensure_workflow_side_panel_pages(false);
+
+        assert_eq!(app.side_panel.focused_page_id.as_deref(), Some("existing"));
+    }
+
+    #[test]
+    fn workflow_pages_without_focus_keep_hidden_panel_hidden() {
+        let mut app = App::new_for_remote(Some("session-test".to_string()));
+        app.side_panel.focused_page_id = None;
+
+        app.ensure_workflow_side_panel_pages(false);
+
+        assert_eq!(app.side_panel.focused_page_id, None);
+    }
+
+    #[test]
+    fn workflow_pages_keep_stable_order_across_refreshes() {
+        let mut app = App::new_for_remote(Some("session-test".to_string()));
+
+        app.ensure_workflow_side_panel_pages(false);
+        let first_order: Vec<String> = app
+            .side_panel
+            .pages
+            .iter()
+            .map(|page| page.id.clone())
+            .collect();
+
+        app.ensure_workflow_side_panel_pages(false);
+        let second_order: Vec<String> = app
+            .side_panel
+            .pages
+            .iter()
+            .map(|page| page.id.clone())
+            .collect();
+
+        assert_eq!(first_order, second_order);
+        assert_eq!(
+            first_order,
+            vec![
+                super::super::todos_view::TODOS_VIEW_PAGE_ID.to_string(),
+                CONTEXT_VIEW_PAGE_ID.to_string(),
+            ]
         );
     }
 }

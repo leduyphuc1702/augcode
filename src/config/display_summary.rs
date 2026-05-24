@@ -57,6 +57,7 @@ impl Config {
 **Features:**
 - Memory: {}
 - Swarm: {}
+- Agent workflow: {}
 - Message timestamps: {}
 - Update channel: {}
 
@@ -162,6 +163,7 @@ impl Config {
             self.display.redraw_fps,
             self.features.memory,
             self.features.swarm,
+            self.features.agent_workflow,
             self.features.message_timestamps,
             self.features.update_channel,
             self.provider
@@ -202,7 +204,7 @@ impl Config {
             self.agents
                 .memory_model
                 .as_deref()
-                .unwrap_or("(sidecar auto-select)"),
+                .unwrap_or("(main model)"),
             self.ambient
                 .model
                 .as_deref()

@@ -124,12 +124,16 @@ pub(super) async fn maybe_handle_session_admin_command(
             };
             let sid = target_id.to_string();
             let working_dir = agent.working_dir().map(|dir| dir.to_string());
+            let provider_name = agent.provider_name();
+            let model = agent.provider_model();
             drop(agent);
             if let Some(transcript) = transcript {
-                crate::memory_agent::trigger_final_extraction_with_dir(
+                crate::memory_agent::trigger_final_extraction_with_provider_model(
                     transcript,
                     sid,
                     working_dir,
+                    provider_name,
+                    model,
                 );
             }
         }
