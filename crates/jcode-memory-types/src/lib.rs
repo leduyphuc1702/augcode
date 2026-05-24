@@ -766,7 +766,15 @@ pub fn normalize_memory_search_text(content: &str, tags: &[String]) -> String {
 }
 
 pub fn memory_matches_search(memory: &MemoryEntry, normalized_query: &str) -> bool {
-    memory.searchable_text().contains(normalized_query)
+    let searchable = memory.searchable_text();
+    if searchable.contains(normalized_query) {
+        return true;
+    }
+
+    normalized_query
+        .split_whitespace()
+        .filter(|term| !term.is_empty())
+        .all(|term| searchable.contains(term))
 }
 
 pub mod ranking {
@@ -938,5 +946,27 @@ pub mod ranking {
             assert!(top_k_by_score([("a", 1.0)], 0).is_empty());
             assert!(top_k_by_ord([("a", 1)], 0).is_empty());
         }
+    }
+}
+
+#[cfg(test)]
+mod search_tests {
+    use super::*;
+
+    #[test]
+    fn memory_search_matches_query_terms_out_of_order() {
+        let entry = MemoryEntry::new(
+            MemoryCategory::Fact,
+            "primary memory: realistic memory retry validates exact search and recent recall",
+        );
+
+        assert!(memory_matches_search(
+            &entry,
+            &normalize_search_text("retry exact recall")
+        ));
+        assert!(!memory_matches_search(
+            &entry,
+            &normalize_search_text("retry missing-token")
+        ));
     }
 }

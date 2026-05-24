@@ -169,6 +169,54 @@ fn test_workflow_answer_event_roundtrip() -> Result<()> {
 }
 
 #[test]
+fn test_workflow_lifecycle_events_roundtrip() -> Result<()> {
+    let phase = ServerEvent::WorkflowPhaseChanged {
+        session_id: "root".to_string(),
+        phase: "plan_review".to_string(),
+        status: "planning".to_string(),
+    };
+    let json = encode_event(&phase);
+    assert!(json.contains("\"type\":\"workflow_phase_changed\""));
+    let ServerEvent::WorkflowPhaseChanged { phase, .. } = parse_event_json(json.trim())? else {
+        return Err(anyhow!("expected WorkflowPhaseChanged"));
+    };
+    assert_eq!(phase, "plan_review");
+
+    let report = ServerEvent::WorkflowAgentReport {
+        session_id: "root".to_string(),
+        task_id: "api".to_string(),
+        agent_role: "backend-agent".to_string(),
+        summary: "implemented".to_string(),
+        validation: "tests pass".to_string(),
+        risks: vec!["none".to_string()],
+        next_action: "review".to_string(),
+    };
+    let json = encode_event(&report);
+    assert!(json.contains("\"type\":\"workflow_agent_report\""));
+    let ServerEvent::WorkflowAgentReport { agent_role, .. } = parse_event_json(json.trim())? else {
+        return Err(anyhow!("expected WorkflowAgentReport"));
+    };
+    assert_eq!(agent_role, "backend-agent");
+
+    let approval = ServerEvent::WorkflowApprovalRequested {
+        session_id: "root".to_string(),
+        approval_id: "final-plan".to_string(),
+        kind: "plan".to_string(),
+        summary: "ready".to_string(),
+        allow_comments: true,
+    };
+    let json = encode_event(&approval);
+    assert!(json.contains("\"type\":\"workflow_approval_requested\""));
+    let ServerEvent::WorkflowApprovalRequested { allow_comments, .. } =
+        parse_event_json(json.trim())?
+    else {
+        return Err(anyhow!("expected WorkflowApprovalRequested"));
+    };
+    assert!(allow_comments);
+    Ok(())
+}
+
+#[test]
 fn test_stdin_response_roundtrip() -> Result<()> {
     let req = Request::StdinResponse {
         id: 99,

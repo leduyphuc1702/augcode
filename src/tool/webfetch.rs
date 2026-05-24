@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use std::time::Duration;
 
 const MAX_SIZE: usize = 5 * 1024 * 1024; // 5MB
-const DEFAULT_TIMEOUT: u64 = 30;
+const DEFAULT_TIMEOUT: u64 = 120;
 const MAX_TIMEOUT: u64 = 120;
 
 pub struct WebFetchTool {

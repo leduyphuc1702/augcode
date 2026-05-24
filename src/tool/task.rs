@@ -32,11 +32,13 @@ impl SubagentTool {
     fn resolve_model(
         requested_model: Option<&str>,
         existing_session_model: Option<&str>,
+        workflow_role_model: Option<&str>,
         parent_subagent_model: Option<&str>,
         provider_model: &str,
     ) -> String {
         requested_model
             .or(existing_session_model)
+            .or(workflow_role_model)
             .or(parent_subagent_model)
             .or(crate::config::config().agents.swarm_model.as_deref())
             .unwrap_or(provider_model)
@@ -201,10 +203,13 @@ impl Tool for SubagentTool {
             session.workflow_task_id = workflow_task_id.map(str::to_string);
         }
         let parent_subagent_model = Self::preferred_parent_subagent_model(&ctx.session_id);
+        let workflow_role_model =
+            workflow_role.and_then(crate::agent_workflow::role_model_override);
         let provider_model = self.provider.model();
         let resolved_model = Self::resolve_model(
             params.model.as_deref(),
             session.model.as_deref(),
+            workflow_role_model.as_deref(),
             parent_subagent_model.as_deref(),
             &provider_model,
         );
@@ -459,7 +464,11 @@ fn update_parent_workflow_task_state(
 ) -> Result<()> {
     let mut parent = Session::load(parent_id)?;
     let mut state = parent.agent_workflow_state.clone().unwrap_or_default();
-    state.status = task.status.clone();
+    if task.summary.is_none() {
+        state.set_phase_for_role_start(&task.agent_role);
+    } else {
+        state.status = task.status.clone();
+    }
     state.upsert_task(task);
     parent.agent_workflow_state = Some(state);
     parent.save()
@@ -638,17 +647,34 @@ mod tests {
             super::SubagentTool::resolve_model(
                 Some("explicit"),
                 Some("existing"),
+                Some("role"),
                 Some("parent"),
                 "provider"
             ),
             "explicit"
         );
         assert_eq!(
-            super::SubagentTool::resolve_model(None, Some("existing"), Some("parent"), "provider"),
+            super::SubagentTool::resolve_model(
+                None,
+                Some("existing"),
+                Some("role"),
+                Some("parent"),
+                "provider"
+            ),
             "existing"
         );
         assert_eq!(
-            super::SubagentTool::resolve_model(None, None, Some("parent"), "provider"),
+            super::SubagentTool::resolve_model(
+                None,
+                None,
+                Some("role"),
+                Some("parent"),
+                "provider"
+            ),
+            "role"
+        );
+        assert_eq!(
+            super::SubagentTool::resolve_model(None, None, None, Some("parent"), "provider"),
             "parent"
         );
         let configured_or_provider = crate::config::config()
@@ -657,7 +683,7 @@ mod tests {
             .as_deref()
             .unwrap_or("provider");
         assert_eq!(
-            super::SubagentTool::resolve_model(None, None, None, "provider"),
+            super::SubagentTool::resolve_model(None, None, None, None, "provider"),
             configured_or_provider
         );
     }

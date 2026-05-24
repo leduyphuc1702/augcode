@@ -452,6 +452,31 @@ impl App {
                 input,
                 vec![
                     ("/agents swarm".into(), "Configure swarm/subagent model"),
+                    (
+                        "/agents agent-orchestrators".into(),
+                        "Configure workflow orchestrator model",
+                    ),
+                    ("/agents plan-agent".into(), "Configure plan-agent model"),
+                    (
+                        "/agents plan-reviewer".into(),
+                        "Configure plan-reviewer model",
+                    ),
+                    (
+                        "/agents plan-finalizer".into(),
+                        "Configure plan-finalizer model",
+                    ),
+                    (
+                        "/agents frontend-agent".into(),
+                        "Configure frontend-agent model",
+                    ),
+                    (
+                        "/agents backend-agent".into(),
+                        "Configure backend-agent model",
+                    ),
+                    (
+                        "/agents code-reviewer".into(),
+                        "Configure workflow code-reviewer model",
+                    ),
                     ("/agents review".into(), "Configure code review model"),
                     ("/agents judge".into(), "Configure judge model"),
                     ("/agents memory".into(), "Configure memory sidecar model"),

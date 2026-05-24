@@ -162,8 +162,9 @@ impl Tool for MemoryTool {
             "recall" => {
                 let limit = input.limit.unwrap_or(10);
                 let scope = Self::parse_scope(input.scope.as_deref(), MemoryScope::All)?;
+                let query = input.query.as_deref().map(str::trim).filter(|q| !q.is_empty());
                 let mode = input.mode.as_deref().unwrap_or_else(|| {
-                    if input.query.is_some() {
+                    if query.is_some() {
                         "cascade"
                     } else {
                         "recent"
@@ -198,8 +199,8 @@ impl Tool for MemoryTool {
                         result
                     }
                     "semantic" | "cascade" => {
-                        let query = match &input.query {
-                            Some(q) => q.clone(),
+                        let query = match query {
+                            Some(q) => q.to_string(),
                             None => {
                                 return Err(anyhow::anyhow!(
                                     "query required for semantic/cascade mode"
@@ -440,6 +441,23 @@ fn truncate_for_widget(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tool::ToolExecutionMode;
+    use serde_json::json;
+    use std::path::PathBuf;
+
+    fn test_ctx() -> ToolContext {
+        ToolContext {
+            session_id: "memory-tool-test-session".to_string(),
+            message_id: "message".to_string(),
+            tool_call_id: "tool-call".to_string(),
+            working_dir: Some(PathBuf::from(env!("CARGO_MANIFEST_DIR"))),
+            allowed_tools: None,
+            agent_role: None,
+            stdin_request_tx: None,
+            graceful_shutdown_signal: None,
+            execution_mode: ToolExecutionMode::Direct,
+        }
+    }
 
     #[test]
     fn schema_only_advertises_core_memory_fields() {
@@ -461,5 +479,48 @@ mod tests {
         assert!(!props.contains_key("weight"));
         assert!(!props.contains_key("depth"));
         assert!(!props.contains_key("mode"));
+    }
+
+    #[tokio::test]
+    async fn recall_with_blank_query_uses_recent_mode() {
+        let tool = MemoryTool::new_test();
+        let ctx = test_ctx();
+
+        tool.execute(
+            json!({
+                "action": "remember",
+                "content": "blank query recall should use recent mode",
+                "scope": "project"
+            }),
+            ctx.clone(),
+        )
+        .await
+        .expect("remember should succeed");
+
+        let output = tool
+            .execute(
+                json!({
+                    "action": "recall",
+                    "query": "",
+                    "limit": 5,
+                    "scope": "project"
+                }),
+                ctx,
+            )
+            .await
+            .expect("recall should succeed");
+
+        assert!(
+            output.output.contains("Recent memories:"),
+            "{}",
+            output.output
+        );
+        assert!(
+            output
+                .output
+                .contains("blank query recall should use recent mode"),
+            "{}",
+            output.output
+        );
     }
 }

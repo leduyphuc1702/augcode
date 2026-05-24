@@ -174,6 +174,10 @@ impl WorkflowModalState {
         }
     }
 
+    fn has_plan_selection(&self) -> bool {
+        matches!(self.kind, WorkflowModalKind::Plan { .. }) && self.anchor != self.cursor
+    }
+
     pub(crate) fn handle_key(
         &mut self,
         code: KeyCode,
@@ -227,7 +231,7 @@ impl WorkflowModalState {
                 proposer_session,
                 reason: None,
             }),
-            KeyCode::Char('c') | KeyCode::Char('C') => {
+            KeyCode::Char('c') | KeyCode::Char('C') if self.has_plan_selection() => {
                 self.input.clear();
                 self.input_mode = Some(WorkflowInputMode::PlanComment);
                 None
@@ -370,6 +374,10 @@ impl WorkflowModalState {
 
         match self.input_mode.take() {
             Some(WorkflowInputMode::PlanComment) => {
+                if !self.has_plan_selection() {
+                    self.input.clear();
+                    return None;
+                }
                 let (start, end) = self.selected_range();
                 let quote = match &self.kind {
                     WorkflowModalKind::Plan { lines, .. } if start < lines.len() => {
@@ -554,15 +562,20 @@ fn draw_plan_modal(
         format!("Comment: {}", state.input)
     } else {
         format!(
-            "Comments: {}   Shift+Up/Down selects range",
-            state.comments.len()
+            "Comments: {}   {}",
+            state.comments.len(),
+            if state.has_plan_selection() {
+                "selection ready for comment"
+            } else {
+                "select text range before commenting"
+            }
         )
     };
     frame.render_widget(Paragraph::new(footer), chunks[2]);
-    let mut buttons = vec![
-        ("Approve", WorkflowModalMouseHit::Approve),
-        ("Add comment", WorkflowModalMouseHit::AddComment),
-    ];
+    let mut buttons = vec![("Approve", WorkflowModalMouseHit::Approve)];
+    if state.has_plan_selection() {
+        buttons.push(("Add comment", WorkflowModalMouseHit::AddComment));
+    }
     if !state.comments.is_empty() {
         buttons.push(("Send comments", WorkflowModalMouseHit::SendComments));
     }
@@ -820,19 +833,27 @@ mod tests {
     }
 
     #[test]
-    fn plan_modal_only_renders_send_comments_after_comment_exists() {
+    fn plan_modal_requires_selection_before_commenting() {
         let mut modal = WorkflowModalState::plan(
             "swarm".to_string(),
             "worker".to_string(),
             None,
-            vec![plan_item("Validate inputs")],
+            vec![plan_item("Validate inputs"), plan_item("Run tests")],
             "Proposed plan".to_string(),
             "plan_proposal:worker".to_string(),
         );
 
         let before = render_modal(&modal);
         assert!(before.contains("Approve"));
+        assert!(!before.contains("Add comment"));
         assert!(!before.contains("Send comments"));
+
+        modal.handle_key(KeyCode::Char('c'), KeyModifiers::empty());
+        assert!(modal.input_mode.is_none());
+
+        modal.handle_key(KeyCode::Down, KeyModifiers::SHIFT);
+        let selected = render_modal(&modal);
+        assert!(selected.contains("Add comment"));
 
         modal.handle_key(KeyCode::Char('c'), KeyModifiers::empty());
         for ch in "needs detail".chars() {

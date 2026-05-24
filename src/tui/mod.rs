@@ -700,6 +700,13 @@ pub enum AccountPickerAction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentModelTarget {
     Swarm,
+    AgentOrchestrators,
+    PlanAgent,
+    PlanReviewer,
+    PlanFinalizer,
+    FrontendAgent,
+    BackendAgent,
+    CodeReviewer,
     Review,
     Judge,
     Memory,
@@ -709,6 +716,7 @@ pub enum AgentModelTarget {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PickerAction {
     Model,
+    RefreshModels,
     Account(AccountPickerAction),
     Login(crate::provider_catalog::LoginProviderDescriptor),
     Usage {
@@ -763,6 +771,7 @@ impl InlineInteractiveState {
 fn estimate_picker_action_bytes(action: &PickerAction) -> usize {
     match action {
         PickerAction::Model
+        | PickerAction::RefreshModels
         | PickerAction::AgentTarget(_)
         | PickerAction::AgentModelChoice { .. } => 0,
         PickerAction::Account(AccountPickerAction::Switch { provider_id, label }) => {

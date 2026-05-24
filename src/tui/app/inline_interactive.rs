@@ -823,6 +823,25 @@ impl App {
                         .cmp(&b.active_option().map(|route| route.api_method.as_str()))
                 })
         });
+        entries.push(PickerEntry {
+            name: "Refresh model catalog".to_string(),
+            options: vec![PickerOption {
+                provider: self.provider.name().to_string(),
+                api_method: "refresh".to_string(),
+                available: true,
+                detail: "fetch active provider /models catalog".to_string(),
+                estimated_reference_cost_micros: None,
+            }],
+            action: PickerAction::RefreshModels,
+            selected_option: 0,
+            is_current: false,
+            recommended: false,
+            recommendation_rank: usize::MAX,
+            old: false,
+            created_date: None,
+            effort: None,
+            is_default: false,
+        });
         let entries_ms = entries_started.elapsed().as_millis();
         let total_ms = picker_started.elapsed().as_millis();
 
@@ -1972,6 +1991,49 @@ impl App {
                                 )));
                                 self.set_status_notice("Agent model save failed");
                             }
+                        }
+                    }
+                    PickerAction::RefreshModels => {
+                        self.inline_interactive_state = None;
+                        let session_id = self.session.id.clone();
+                        crate::bus::Bus::global().publish(crate::bus::BusEvent::UiActivity(
+                            crate::bus::UiActivity::catalog(
+                                Some(session_id.clone()),
+                                "**Model List Refresh Started**\n\nFetching the active provider model catalog now.",
+                                Some("Refreshing model list..."),
+                            ),
+                        ));
+                        self.set_status_notice("Refreshing model list...");
+                        let provider = self.provider.clone();
+                        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                            handle.spawn(async move {
+                                let result = provider
+                                    .refresh_model_catalog()
+                                    .await
+                                    .map_err(|error| error.to_string());
+                                crate::bus::Bus::global().publish(
+                                    crate::bus::BusEvent::ModelRefreshCompleted(
+                                        crate::bus::ModelRefreshCompleted { session_id, result },
+                                    ),
+                                );
+                            });
+                        } else {
+                            std::thread::spawn(move || {
+                                let result = match tokio::runtime::Builder::new_current_thread()
+                                    .enable_all()
+                                    .build()
+                                {
+                                    Ok(runtime) => runtime
+                                        .block_on(provider.refresh_model_catalog())
+                                        .map_err(|error| error.to_string()),
+                                    Err(error) => Err(error.to_string()),
+                                };
+                                crate::bus::Bus::global().publish(
+                                    crate::bus::BusEvent::ModelRefreshCompleted(
+                                        crate::bus::ModelRefreshCompleted { session_id, result },
+                                    ),
+                                );
+                            });
                         }
                     }
                     PickerAction::Model => {
