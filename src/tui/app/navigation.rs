@@ -48,6 +48,11 @@ impl App {
     }
 
     pub(super) fn try_open_link_at(&mut self, column: u16, row: u16) -> bool {
+        if crate::util::system_open_suppressed_for_tests() {
+            return self.try_open_link_at_with(column, row, |_| {
+                Err("system opener suppressed in test mode")
+            });
+        }
         self.try_open_link_at_with(column, row, |url| open::that_detached(url))
     }
 
@@ -647,6 +652,10 @@ impl App {
         let diagram = &diagrams[index];
         if let Some(path) = super::super::mermaid::get_cached_path(diagram.hash) {
             if path.exists() {
+                if crate::util::system_open_suppressed_for_tests() {
+                    self.set_status_notice("Open suppressed in test mode");
+                    return;
+                }
                 match open::that_detached(&path) {
                     Ok(_) => self.set_status_notice(format!(
                         "Opened diagram {}/{} in viewer",
@@ -828,6 +837,7 @@ impl App {
         let mut over_diff_pane = false;
         let mut on_diagram_border = false;
         let mut input_area: Option<Rect> = None;
+        let mut inline_ui_area: Option<Rect> = None;
         let mut current_messages_area: Option<Rect> = None;
         let mut current_diagram_area: Option<Rect> = None;
         let mut terminal_width: u16 = 0;
@@ -836,6 +846,7 @@ impl App {
             current_messages_area = Some(layout.messages_area);
             current_diagram_area = layout.diagram_area;
             input_area = layout.input_area;
+            inline_ui_area = layout.inline_ui_area;
             terminal_width =
                 layout.messages_area.width + layout.diagram_area.map(|a| a.width).unwrap_or(0);
             terminal_height =
@@ -885,6 +896,12 @@ impl App {
 
         if let Some(scroll_only) = self.handle_copy_selection_mouse(mouse) {
             return scroll_only;
+        }
+
+        if let Some(area) = inline_ui_area
+            && self.handle_inline_interactive_mouse_click(mouse, area)
+        {
+            return false;
         }
 
         let clicked_input_cursor = if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))

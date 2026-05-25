@@ -76,6 +76,26 @@ async fn execute_rejects_reveal_for_url() {
 }
 
 #[tokio::test]
+async fn execute_suppresses_system_open_in_tests() {
+    let tool = OpenTool::new();
+    let output = tool
+        .execute(json!({"target": "https://example.com/docs"}), make_ctx())
+        .await
+        .unwrap();
+
+    assert!(output.output.contains("suppressed-in-test"));
+    assert_eq!(
+        output
+            .metadata
+            .as_ref()
+            .expect("metadata")
+            .get("backend")
+            .and_then(|value| value.as_str()),
+        Some("suppressed-in-test")
+    );
+}
+
+#[tokio::test]
 async fn execute_rejects_removed_mode_parameter() {
     let tool = OpenTool::new();
     let err = tool

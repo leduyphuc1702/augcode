@@ -776,19 +776,7 @@ impl OpenAIProvider {
                     return fallback;
                 }
             }
-            crate::provider::AccountModelAvailabilityState::Unknown => {
-                if crate::provider::should_refresh_openai_model_catalog()
-                    && crate::provider::begin_openai_model_catalog_refresh()
-                {
-                    let creds = self.credentials.read().await;
-                    let token = creds.access_token.clone();
-                    drop(creds);
-                    crate::provider::refresh_openai_model_catalog_in_background(
-                        token,
-                        "openai-request-setup",
-                    );
-                }
-            }
+            crate::provider::AccountModelAvailabilityState::Unknown => {}
             crate::provider::AccountModelAvailabilityState::Available => {}
         }
 

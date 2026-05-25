@@ -197,6 +197,14 @@ fn open_overnight_review(app: &mut App) {
                 )));
                 return;
             }
+            if crate::util::system_open_suppressed_for_tests() {
+                app.push_display_message(DisplayMessage::system(format!(
+                    "Overnight review page: `{}`",
+                    manifest.review_path.display()
+                )));
+                app.set_status_notice("Open suppressed in test mode");
+                return;
+            }
             match open::that_detached(&manifest.review_path) {
                 Ok(()) => {
                     app.push_display_message(DisplayMessage::system(format!(

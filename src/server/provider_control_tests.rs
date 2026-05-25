@@ -142,7 +142,9 @@ impl Provider for AuthChangeMockProvider {
 
 fn lock_env() -> StdMutexGuard<'static, ()> {
     static LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| StdMutex::new(())).lock().unwrap()
+    LOCK.get_or_init(|| StdMutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 struct EnvGuard {
@@ -256,7 +258,7 @@ async fn notify_auth_changed_emits_available_models_updated_after_provider_updat
                 crate::bus::BusEvent::UiActivity(activity)
                     if activity.kind == crate::bus::UiActivityKind::Catalog
                         && activity.session_id.as_deref() == Some(session_id.as_str())
-                        && activity.message.contains("Auth Model Catalog Updated") =>
+                        && activity.message.contains("Auth Model List Updated") =>
                 {
                     break activity;
                 }
@@ -548,7 +550,7 @@ async fn notify_auth_changed_typed_cerebras_event_controls_user_visible_catalog_
                 crate::bus::BusEvent::UiActivity(activity)
                     if activity.kind == crate::bus::UiActivityKind::Catalog
                         && activity.session_id.as_deref() == Some(session_id.as_str())
-                        && activity.message.contains("Auth Model Catalog Updated") =>
+                        && activity.message.contains("Auth Model List Updated") =>
                 {
                     break activity;
                 }
@@ -653,7 +655,7 @@ async fn notify_auth_changed_switches_from_stale_model_to_matching_provider_rout
                 crate::bus::BusEvent::UiActivity(activity)
                     if activity.kind == crate::bus::UiActivityKind::Catalog
                         && activity.session_id.as_deref() == Some(session_id.as_str())
-                        && activity.message.contains("Auth Model Catalog Updated") =>
+                        && activity.message.contains("Auth Model List Updated") =>
                 {
                     break activity;
                 }
@@ -782,7 +784,7 @@ async fn notify_auth_changed_does_not_override_manual_model_selected_during_refr
                 crate::bus::BusEvent::UiActivity(activity)
                     if activity.kind == crate::bus::UiActivityKind::Catalog
                         && activity.session_id.as_deref() == Some(session_id.as_str())
-                        && activity.message.contains("Auth Model Catalog Updated") =>
+                        && activity.message.contains("Auth Model List Updated") =>
                 {
                     break activity;
                 }
@@ -964,7 +966,7 @@ async fn auth_model_first_prompt_e2e_state_space_is_bounded_by_selection_source(
                     crate::bus::BusEvent::UiActivity(activity)
                         if activity.kind == crate::bus::UiActivityKind::Catalog
                             && activity.session_id.as_deref() == Some(session_id.as_str())
-                            && activity.message.contains("Auth Model Catalog Updated") =>
+                            && activity.message.contains("Auth Model List Updated") =>
                     {
                         break activity;
                     }

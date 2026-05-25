@@ -1,70 +1,1756 @@
 [
-  {"category":"understand","query":"how does CodebaseSyncEngine open workspace rescan manifest index snapshot", "expected_files":["crates/jcode-codebase-sync/src/lib.rs"]},
-  {"category":"understand","query":"IndexStore save_full apply_delta index json delta journal", "expected_files":["crates/jcode-codebase-sync/src/lib.rs"]},
-  {"category":"understand","query":"AstIndex tree sitter chunks SymbolDefinition confidence", "expected_files":["crates/jcode-codebase-sync/src/ast.rs"]},
-  {"category":"understand","query":"tree sitter parses rust symbols function_item impl_item", "expected_files":["crates/jcode-codebase-sync/src/ast.rs"]},
-  {"category":"understand","query":"tree sitter parses typescript interface class function", "expected_files":["crates/jcode-codebase-sync/src/ast.rs"]},
-  {"category":"understand","query":"tree sitter parses python async def class", "expected_files":["crates/jcode-codebase-sync/src/ast.rs"]},
-  {"category":"understand","query":"persistent lexical index data BM25 search document", "expected_files":["crates/jcode-codebase-sync/src/lib.rs"]},
-  {"category":"understand","query":"dependency graph import edges test_source contains_symbol", "expected_files":["crates/jcode-codebase-sync/src/lib.rs"]},
-  {"category":"understand","query":"workspace watcher debounce file events native notify", "expected_files":["crates/jcode-codebase-sync/src/lib.rs"]},
-  {"category":"understand","query":"snapshot token authorize path hash read_file_authorized", "expected_files":["crates/jcode-codebase-sync/src/lib.rs"]},
-
-  {"category":"retrieval","query":"CodebaseRetrievalEngine search persistent IndexSnapshot", "expected_files":["crates/jcode-codebase-retrieval/src/lib.rs"]},
-  {"category":"retrieval","query":"search_ast_chunks ast function name candidate", "expected_files":["crates/jcode-codebase-retrieval/src/lib.rs"]},
-  {"category":"retrieval","query":"HybridReranker deterministic source path graph package intent score", "expected_files":["crates/jcode-codebase-retrieval/src/lib.rs"]},
-  {"category":"retrieval","query":"dedupe_candidates path start_line end_line merge why", "expected_files":["crates/jcode-codebase-retrieval/src/lib.rs"]},
-  {"category":"retrieval","query":"compress_candidates token budget duplicate path ranges", "expected_files":["crates/jcode-codebase-retrieval/src/lib.rs"]},
-  {"category":"retrieval","query":"search_manifest_files bm25 path content current local snapshot", "expected_files":["crates/jcode-codebase-retrieval/src/lib.rs"]},
-  {"category":"retrieval","query":"search_symbols SymbolIndex symbol name definition match", "expected_files":["crates/jcode-codebase-retrieval/src/lib.rs"]},
-  {"category":"retrieval","query":"bfs_distances graph_distance_bonus active_file", "expected_files":["crates/jcode-codebase-retrieval/src/lib.rs"]},
-  {"category":"retrieval","query":"candidate_matches_disk sha256 stale fallback scan", "expected_files":["crates/jcode-codebase-retrieval/src/lib.rs"]},
-  {"category":"retrieval","query":"query planner intent detection weights SourceWeights", "expected_files":["crates/jcode-codebase-retrieval/src/query_planner.rs"]},
-  {"category":"retrieval","query":"lexical_index BM25 K1 B SearchHit", "expected_files":["crates/jcode-codebase-retrieval/src/lexical_index.rs"]},
-
-  {"category":"eval","query":"RetrievalEvalCase active_file must_not_return category", "expected_files":["crates/jcode-codebase-retrieval/src/lib.rs"]},
-  {"category":"eval","query":"RetrievalEvalReport category recall missing_expected mrr_bps", "expected_files":["crates/jcode-codebase-retrieval/src/lib.rs"]},
-  {"category":"eval","query":"codebase_eval tool recall_at_5 stale_context_count", "expected_files":["src/tool/codebase_eval.rs"]},
-  {"category":"eval","query":"eval_real_repo_recall_at_5_above_threshold Recall@5 threshold", "expected_files":["crates/jcode-codebase-retrieval/src/lib.rs"]},
-  {"category":"eval","query":"eval_real_repo_recall_at_5_above_threshold", "expected_files":["crates/jcode-codebase-retrieval/src/lib.rs"]},
-
-  {"category":"tools","query":"codebase_search tool render_response snapshot freshness", "expected_files":["src/tool/codebase_search.rs"]},
-  {"category":"tools","query":"read_file tool snapshot auth path content hash", "expected_files":["src/tool/read_file.rs"]},
-  {"category":"tools","query":"sync_status tool phase percent indexed skipped last_error", "expected_files":["src/tool/sync_status.rs"]},
-  {"category":"tools","query":"sync drain outbox ready queue", "expected_files":["src/tool/sync_drain.rs"]},
-  {"category":"tools","query":"commit lineage search git history changed files", "expected_files":["src/tool/commit_lineage_search.rs"]},
-  {"category":"tools","query":"tool registry inserts codebase_search codebase_eval sync_status", "expected_files":["src/tool/mod.rs"]},
-
-  {"category":"injection","query":"build_codebase_context_prompt code related query system reminder", "expected_files":["src/codebase_context.rs"]},
-  {"category":"injection","query":"format_context_prompt Codebase Context snapshot relevant snippets", "expected_files":["src/codebase_context.rs"]},
-  {"category":"injection","query":"Agent build_codebase_context_prompt working_dir messages", "expected_files":["src/agent/prompting.rs"]},
-  {"category":"injection","query":"src/agent/turn_loops.rs build_codebase_context_prompt system-reminder", "expected_files":["src/agent/turn_loops.rs"]},
-  {"category":"injection","query":"src/agent/turn_streaming_mpsc.rs build_codebase_context_prompt codebase_prompt", "expected_files":["src/agent/turn_streaming_mpsc.rs"]},
-  {"category":"injection","query":"src/agent/turn_streaming_broadcast.rs build_codebase_context_prompt codebase_context_prompt", "expected_files":["src/agent/turn_streaming_broadcast.rs"]},
-
-  {"category":"runtime","query":"codebase_sync_runtime start_for_session publish progress", "expected_files":["src/codebase_sync_runtime.rs"]},
-  {"category":"runtime","query":"start_for_path cold index background sync", "expected_files":["src/codebase_sync_runtime.rs"]},
-  {"category":"runtime","query":"src/tui/app/tui_lifecycle.rs codebase_sync_runtime start_for_session", "expected_files":["src/tui/app/tui_lifecycle.rs"]},
-  {"category":"runtime","query":"tui lifecycle runtime resumed session codebase sync", "expected_files":["src/tui/app/tui_lifecycle_runtime.rs"]},
-
-  {"category":"config","query":"features codebase_sync config default true", "expected_files":["crates/jcode-config-types/src/lib.rs"]},
-  {"category":"config","query":"src/config/env_overrides.rs JCODE_CODEBASE_SYNC_ENABLED codebase_sync", "expected_files":["src/config/env_overrides.rs"]},
-  {"category":"config","query":"default config file codebase_sync feature", "expected_files":["src/config/default_file.rs"]},
-  {"category":"config","query":"config tests codebase sync env", "expected_files":["src/config_tests.rs"]},
-
-  {"category":"edit","query":"on_file_change deleted renamed modified updates index snapshot", "expected_files":["crates/jcode-codebase-sync/src/lib.rs"], "active_file":"crates/jcode-codebase-sync/src/lib.rs"},
-  {"category":"edit","query":"apply_lexical_delta removes renamed added modified documents", "expected_files":["crates/jcode-codebase-sync/src/lib.rs"], "active_file":"crates/jcode-codebase-sync/src/lib.rs"},
-  {"category":"edit","query":"AstIndex apply_delta remove_path upsert_file", "expected_files":["crates/jcode-codebase-sync/src/ast.rs"], "active_file":"crates/jcode-codebase-sync/src/ast.rs"},
-  {"category":"edit","query":"range_from_snapshot_lines ast chunk full range", "expected_files":["crates/jcode-codebase-retrieval/src/lib.rs"], "active_file":"crates/jcode-codebase-retrieval/src/lib.rs"},
-
-  {"category":"test","query":"open_workspace_persists_index_snapshot_and_journal", "expected_files":["crates/jcode-codebase-sync/src/lib.rs"]},
-  {"category":"test","query":"file_change_updates_persistent_index IndexStore load validates changed auth file", "expected_files":["crates/jcode-codebase-sync/src/lib.rs"]},
-  {"category":"test","query":"hot_query_reuses_persisted_index_snapshot", "expected_files":["crates/jcode-codebase-retrieval/src/lib.rs"]},
-  {"category":"test","query":"eval_fixture_reports_recall_at_5", "expected_files":["crates/jcode-codebase-retrieval/src/lib.rs"]},
-  {"category":"test","query":"detects_code_related_queries", "expected_files":["src/codebase_context.rs"]},
-
-  {"category":"refactor","query":"remove per query rebuild overlay symbol BM25 vector", "expected_files":["crates/jcode-codebase-retrieval/src/lib.rs"]},
-  {"category":"refactor","query":"schema_version 2 cold reindex IndexStore load", "expected_files":["crates/jcode-codebase-sync/src/lib.rs"]},
-  {"category":"review","query":"forbidden_context_count unauthorized_candidate_count stale_context_count", "expected_files":["crates/jcode-codebase-retrieval/src/lib.rs"]},
-  {"category":"review","query":"generated vendor dist min js penalty", "expected_files":["crates/jcode-codebase-retrieval/src/lib.rs"]}
+  {
+    "category": "understand",
+    "query": "how does CodebaseSyncEngine open workspace rescan manifest index snapshot",
+    "expected_files": [
+      "crates/jcode-codebase-sync/src/lib.rs"
+    ]
+  },
+  {
+    "category": "understand",
+    "query": "IndexStore save_full apply_delta index json delta journal",
+    "expected_files": [
+      "crates/jcode-codebase-sync/src/lib.rs"
+    ]
+  },
+  {
+    "category": "understand",
+    "query": "AstIndex tree sitter chunks SymbolDefinition confidence",
+    "expected_files": [
+      "crates/jcode-codebase-sync/src/ast.rs"
+    ]
+  },
+  {
+    "category": "understand",
+    "query": "tree sitter parses rust symbols function_item impl_item",
+    "expected_files": [
+      "crates/jcode-codebase-sync/src/ast.rs"
+    ]
+  },
+  {
+    "category": "understand",
+    "query": "tree sitter parses typescript interface class function",
+    "expected_files": [
+      "crates/jcode-codebase-sync/src/ast.rs"
+    ]
+  },
+  {
+    "category": "understand",
+    "query": "tree sitter parses python async def class",
+    "expected_files": [
+      "crates/jcode-codebase-sync/src/ast.rs"
+    ]
+  },
+  {
+    "category": "understand",
+    "query": "persistent lexical index data BM25 search document",
+    "expected_files": [
+      "crates/jcode-codebase-sync/src/lib.rs"
+    ]
+  },
+  {
+    "category": "understand",
+    "query": "dependency graph import edges test_source contains_symbol",
+    "expected_files": [
+      "crates/jcode-codebase-sync/src/lib.rs"
+    ]
+  },
+  {
+    "category": "understand",
+    "query": "workspace watcher debounce file events native notify",
+    "expected_files": [
+      "crates/jcode-codebase-sync/src/lib.rs"
+    ]
+  },
+  {
+    "category": "understand",
+    "query": "snapshot token authorize path hash read_file_authorized",
+    "expected_files": [
+      "crates/jcode-codebase-sync/src/lib.rs"
+    ]
+  },
+  {
+    "category": "retrieval",
+    "query": "CodebaseRetrievalEngine search persistent IndexSnapshot",
+    "expected_files": [
+      "crates/jcode-codebase-retrieval/src/lib.rs"
+    ]
+  },
+  {
+    "category": "retrieval",
+    "query": "search_ast_chunks ast function name candidate",
+    "expected_files": [
+      "crates/jcode-codebase-retrieval/src/lib.rs"
+    ]
+  },
+  {
+    "category": "retrieval",
+    "query": "HybridReranker deterministic source path graph package intent score",
+    "expected_files": [
+      "crates/jcode-codebase-retrieval/src/lib.rs"
+    ]
+  },
+  {
+    "category": "retrieval",
+    "query": "dedupe_candidates path start_line end_line merge why",
+    "expected_files": [
+      "crates/jcode-codebase-retrieval/src/lib.rs"
+    ]
+  },
+  {
+    "category": "retrieval",
+    "query": "compress_candidates token budget duplicate path ranges",
+    "expected_files": [
+      "crates/jcode-codebase-retrieval/src/lib.rs"
+    ]
+  },
+  {
+    "category": "retrieval",
+    "query": "search_manifest_files bm25 path content current local snapshot",
+    "expected_files": [
+      "crates/jcode-codebase-retrieval/src/lib.rs"
+    ]
+  },
+  {
+    "category": "retrieval",
+    "query": "search_symbols SymbolIndex symbol name definition match",
+    "expected_files": [
+      "crates/jcode-codebase-retrieval/src/lib.rs"
+    ]
+  },
+  {
+    "category": "retrieval",
+    "query": "bfs_distances graph_distance_bonus active_file",
+    "expected_files": [
+      "crates/jcode-codebase-retrieval/src/lib.rs"
+    ]
+  },
+  {
+    "category": "retrieval",
+    "query": "candidate_matches_disk sha256 stale fallback scan",
+    "expected_files": [
+      "crates/jcode-codebase-retrieval/src/lib.rs"
+    ]
+  },
+  {
+    "category": "retrieval",
+    "query": "query planner intent detection weights SourceWeights",
+    "expected_files": [
+      "crates/jcode-codebase-retrieval/src/query_planner.rs"
+    ]
+  },
+  {
+    "category": "retrieval",
+    "query": "lexical_index BM25 K1 B SearchHit",
+    "expected_files": [
+      "crates/jcode-codebase-retrieval/src/lexical_index.rs"
+    ]
+  },
+  {
+    "category": "eval",
+    "query": "RetrievalEvalCase active_file must_not_return category",
+    "expected_files": [
+      "crates/jcode-codebase-retrieval/src/lib.rs"
+    ]
+  },
+  {
+    "category": "eval",
+    "query": "RetrievalEvalReport category recall missing_expected mrr_bps",
+    "expected_files": [
+      "crates/jcode-codebase-retrieval/src/lib.rs"
+    ]
+  },
+  {
+    "category": "eval",
+    "query": "codebase_eval tool recall_at_5 stale_context_count",
+    "expected_files": [
+      "src/tool/codebase_eval.rs"
+    ]
+  },
+  {
+    "category": "eval",
+    "query": "eval_real_repo_recall_at_5_above_threshold Recall@5 threshold",
+    "expected_files": [
+      "crates/jcode-codebase-retrieval/src/lib.rs"
+    ]
+  },
+  {
+    "category": "eval",
+    "query": "eval_real_repo_recall_at_5_above_threshold",
+    "expected_files": [
+      "crates/jcode-codebase-retrieval/src/lib.rs"
+    ]
+  },
+  {
+    "category": "tools",
+    "query": "codebase_search tool render_response snapshot freshness",
+    "expected_files": [
+      "src/tool/codebase_search.rs"
+    ]
+  },
+  {
+    "category": "tools",
+    "query": "read_file tool snapshot auth path content hash",
+    "expected_files": [
+      "src/tool/read_file.rs"
+    ]
+  },
+  {
+    "category": "tools",
+    "query": "sync_status tool phase percent indexed skipped last_error",
+    "expected_files": [
+      "src/tool/sync_status.rs"
+    ]
+  },
+  {
+    "category": "tools",
+    "query": "sync drain outbox ready queue",
+    "expected_files": [
+      "src/tool/sync_drain.rs"
+    ]
+  },
+  {
+    "category": "tools",
+    "query": "commit lineage search git history changed files",
+    "expected_files": [
+      "src/tool/commit_lineage_search.rs"
+    ]
+  },
+  {
+    "category": "tools",
+    "query": "tool registry inserts codebase_search codebase_eval sync_status",
+    "expected_files": [
+      "src/tool/mod.rs"
+    ]
+  },
+  {
+    "category": "injection",
+    "query": "build_codebase_context_prompt code related query system reminder",
+    "expected_files": [
+      "src/codebase_context.rs"
+    ]
+  },
+  {
+    "category": "injection",
+    "query": "format_context_prompt Codebase Context snapshot relevant snippets",
+    "expected_files": [
+      "src/codebase_context.rs"
+    ]
+  },
+  {
+    "category": "injection",
+    "query": "Agent build_codebase_context_prompt working_dir messages",
+    "expected_files": [
+      "src/agent/prompting.rs"
+    ]
+  },
+  {
+    "category": "injection",
+    "query": "src/agent/turn_loops.rs build_codebase_context_prompt system-reminder",
+    "expected_files": [
+      "src/agent/turn_loops.rs"
+    ]
+  },
+  {
+    "category": "injection",
+    "query": "src/agent/turn_streaming_mpsc.rs build_codebase_context_prompt codebase_prompt",
+    "expected_files": [
+      "src/agent/turn_streaming_mpsc.rs"
+    ]
+  },
+  {
+    "category": "injection",
+    "query": "src/agent/turn_streaming_broadcast.rs build_codebase_context_prompt codebase_context_prompt",
+    "expected_files": [
+      "src/agent/turn_streaming_broadcast.rs"
+    ]
+  },
+  {
+    "category": "runtime",
+    "query": "codebase_sync_runtime start_for_session publish progress",
+    "expected_files": [
+      "src/codebase_sync_runtime.rs"
+    ]
+  },
+  {
+    "category": "runtime",
+    "query": "start_for_path cold index background sync",
+    "expected_files": [
+      "src/codebase_sync_runtime.rs"
+    ]
+  },
+  {
+    "category": "runtime",
+    "query": "src/tui/app/tui_lifecycle.rs codebase_sync_runtime start_for_session",
+    "expected_files": [
+      "src/tui/app/tui_lifecycle.rs"
+    ]
+  },
+  {
+    "category": "runtime",
+    "query": "tui lifecycle runtime resumed session codebase sync",
+    "expected_files": [
+      "src/tui/app/tui_lifecycle_runtime.rs"
+    ]
+  },
+  {
+    "category": "config",
+    "query": "features codebase_sync config default true",
+    "expected_files": [
+      "crates/jcode-config-types/src/lib.rs"
+    ]
+  },
+  {
+    "category": "config",
+    "query": "src/config/env_overrides.rs JCODE_CODEBASE_SYNC_ENABLED codebase_sync",
+    "expected_files": [
+      "src/config/env_overrides.rs"
+    ]
+  },
+  {
+    "category": "config",
+    "query": "default config file codebase_sync feature",
+    "expected_files": [
+      "src/config/default_file.rs"
+    ]
+  },
+  {
+    "category": "config",
+    "query": "config tests codebase sync env",
+    "expected_files": [
+      "src/config_tests.rs"
+    ]
+  },
+  {
+    "category": "edit",
+    "query": "on_file_change deleted renamed modified updates index snapshot",
+    "expected_files": [
+      "crates/jcode-codebase-sync/src/lib.rs"
+    ],
+    "active_file": "crates/jcode-codebase-sync/src/lib.rs"
+  },
+  {
+    "category": "edit",
+    "query": "apply_lexical_delta removes renamed added modified documents",
+    "expected_files": [
+      "crates/jcode-codebase-sync/src/lib.rs"
+    ],
+    "active_file": "crates/jcode-codebase-sync/src/lib.rs"
+  },
+  {
+    "category": "edit",
+    "query": "AstIndex apply_delta remove_path upsert_file",
+    "expected_files": [
+      "crates/jcode-codebase-sync/src/ast.rs"
+    ],
+    "active_file": "crates/jcode-codebase-sync/src/ast.rs"
+  },
+  {
+    "category": "edit",
+    "query": "range_from_snapshot_lines ast chunk full range",
+    "expected_files": [
+      "crates/jcode-codebase-retrieval/src/lib.rs"
+    ],
+    "active_file": "crates/jcode-codebase-retrieval/src/lib.rs"
+  },
+  {
+    "category": "test",
+    "query": "open_workspace_persists_index_snapshot_and_journal",
+    "expected_files": [
+      "crates/jcode-codebase-sync/src/lib.rs"
+    ]
+  },
+  {
+    "category": "test",
+    "query": "file_change_updates_persistent_index IndexStore load validates changed auth file",
+    "expected_files": [
+      "crates/jcode-codebase-sync/src/lib.rs"
+    ]
+  },
+  {
+    "category": "test",
+    "query": "hot_query_reuses_persisted_index_snapshot",
+    "expected_files": [
+      "crates/jcode-codebase-retrieval/src/lib.rs"
+    ]
+  },
+  {
+    "category": "test",
+    "query": "eval_fixture_reports_recall_at_5",
+    "expected_files": [
+      "crates/jcode-codebase-retrieval/src/lib.rs"
+    ]
+  },
+  {
+    "category": "test",
+    "query": "detects_code_related_queries",
+    "expected_files": [
+      "src/codebase_context.rs"
+    ]
+  },
+  {
+    "category": "refactor",
+    "query": "remove per query rebuild overlay symbol BM25 vector",
+    "expected_files": [
+      "crates/jcode-codebase-retrieval/src/lib.rs"
+    ]
+  },
+  {
+    "category": "refactor",
+    "query": "schema_version 2 cold reindex IndexStore load",
+    "expected_files": [
+      "crates/jcode-codebase-sync/src/lib.rs"
+    ]
+  },
+  {
+    "category": "review",
+    "query": "forbidden_context_count unauthorized_candidate_count stale_context_count",
+    "expected_files": [
+      "crates/jcode-codebase-retrieval/src/lib.rs"
+    ]
+  },
+  {
+    "category": "review",
+    "query": "generated vendor dist min js penalty",
+    "expected_files": [
+      "crates/jcode-codebase-retrieval/src/lib.rs"
+    ]
+  },
+  {
+    "category": "graph",
+    "query": "GraphEdgeKind handles_route fetches belongs_to_package",
+    "expected_files": [
+      "crates/jcode-codebase-sync/src/lib.rs"
+    ]
+  },
+  {
+    "category": "graph",
+    "query": "GraphNodeKind route tool package symbol typed graph nodes",
+    "expected_files": [
+      "crates/jcode-codebase-sync/src/lib.rs"
+    ]
+  },
+  {
+    "category": "graph",
+    "query": "extract_tool_names impl Tool for fn name string literal",
+    "expected_files": [
+      "crates/jcode-codebase-sync/src/lib.rs"
+    ]
+  },
+  {
+    "category": "graph",
+    "query": "extract_fetch_routes fetch api route strings",
+    "expected_files": [
+      "crates/jcode-codebase-sync/src/lib.rs"
+    ]
+  },
+  {
+    "category": "graph",
+    "query": "extract_route_handlers pages api route_from_api_path",
+    "expected_files": [
+      "crates/jcode-codebase-sync/src/lib.rs"
+    ]
+  },
+  {
+    "category": "impact",
+    "query": "ImpactRequest ImpactResponse ImpactDirection upstream downstream both",
+    "expected_files": [
+      "crates/jcode-codebase-retrieval/src/lib.rs"
+    ]
+  },
+  {
+    "category": "impact",
+    "query": "impact_snapshot graph_edges_for_direction related_tests_for_paths risk_level",
+    "expected_files": [
+      "crates/jcode-codebase-retrieval/src/lib.rs"
+    ]
+  },
+  {
+    "category": "impact",
+    "query": "fallback_lexical_references symbol impact",
+    "expected_files": [
+      "crates/jcode-codebase-retrieval/src/lib.rs"
+    ]
+  },
+  {
+    "category": "impact",
+    "query": "codebase_impact tool target_path symbol_name include_tests",
+    "expected_files": [
+      "src/tool/codebase_impact.rs"
+    ]
+  },
+  {
+    "category": "impact",
+    "query": "render_impact dependency_paths related_tests affected",
+    "expected_files": [
+      "src/tool/codebase_impact.rs"
+    ]
+  },
+  {
+    "category": "route",
+    "query": "RouteMapRequest RouteMapResponse RouteMapEntry RouteEndpoint",
+    "expected_files": [
+      "crates/jcode-codebase-retrieval/src/lib.rs"
+    ]
+  },
+  {
+    "category": "route",
+    "query": "route_map_snapshot handles_route fetches consumers handlers downstream",
+    "expected_files": [
+      "crates/jcode-codebase-retrieval/src/lib.rs"
+    ]
+  },
+  {
+    "category": "route",
+    "query": "codebase_route_map tool route filter render_route_map",
+    "expected_files": [
+      "src/tool/codebase_route_map.rs"
+    ]
+  },
+  {
+    "category": "route",
+    "query": "tool codebase_route_map consumers handlers downstream",
+    "expected_files": [
+      "src/tool/codebase_route_map.rs"
+    ]
+  },
+  {
+    "category": "changes",
+    "query": "ChangeAnalysisRequest ChangeAnalysisResponse ChangedSymbol ChangeImpact",
+    "expected_files": [
+      "crates/jcode-codebase-retrieval/src/lib.rs"
+    ]
+  },
+  {
+    "category": "changes",
+    "query": "analyze_changes_snapshot git_changed_files parse_diff_hunks changed_symbols_for_ranges",
+    "expected_files": [
+      "crates/jcode-codebase-retrieval/src/lib.rs"
+    ]
+  },
+  {
+    "category": "changes",
+    "query": "suggested_checks_for_files cargo test jcode-codebase-retrieval",
+    "expected_files": [
+      "crates/jcode-codebase-retrieval/src/lib.rs"
+    ]
+  },
+  {
+    "category": "changes",
+    "query": "codebase_changes tool changed_symbols suggested_checks",
+    "expected_files": [
+      "src/tool/codebase_changes.rs"
+    ]
+  },
+  {
+    "category": "changes",
+    "query": "render_changes changed_files impact suggested_tests",
+    "expected_files": [
+      "src/tool/codebase_changes.rs"
+    ]
+  },
+  {
+    "category": "trace",
+    "query": "RetrievalTraceCandidate graph_path node_kind edge_kind rerank_reasons dedupe_key",
+    "expected_files": [
+      "crates/jcode-codebase-retrieval/src/lib.rs"
+    ]
+  },
+  {
+    "category": "trace",
+    "query": "trace_candidate includes graph metadata omitted reason",
+    "expected_files": [
+      "crates/jcode-codebase-retrieval/src/lib.rs"
+    ]
+  },
+  {
+    "category": "trace",
+    "query": "codebase_search render_response graph_path edge kind",
+    "expected_files": [
+      "src/tool/codebase_search.rs"
+    ]
+  },
+  {
+    "category": "eval",
+    "query": "RetrievalEvalSourceReport source waste token graph contribution impacted test recall",
+    "expected_files": [
+      "crates/jcode-codebase-retrieval/src/lib.rs"
+    ]
+  },
+  {
+    "category": "eval",
+    "query": "codebase_eval graph_contribution_rate_bps impacted_test_recall_bps source waste",
+    "expected_files": [
+      "src/tool/codebase_eval.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/mod.rs codebase_impact codebase_changes codebase_route_map registry",
+    "expected_files": [
+      "src/tool/mod.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "codebase_search_tests e2e_search_can_render_retrieval_trace",
+    "expected_files": [
+      "src/tool/codebase_search_tests.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "agentgrep context parse git diff files relations",
+    "expected_files": [
+      "src/tool/agentgrep/context.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "commit_lineage_search changed files technical terms",
+    "expected_files": [
+      "src/tool/commit_lineage_search.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "lsp tool definitions references hover diagnostics",
+    "expected_files": [
+      "src/tool/lsp.rs"
+    ]
+  },
+  {
+    "category": "core",
+    "query": "src/agent_workflow.rs mutation_tools edit_tools role policy",
+    "expected_files": [
+      "src/agent_workflow.rs"
+    ]
+  },
+  {
+    "category": "core",
+    "query": "src/agent.rs turn execution prompt tools",
+    "expected_files": [
+      "src/agent.rs"
+    ]
+  },
+  {
+    "category": "core",
+    "query": "src/prompt.rs system prompt tool definitions",
+    "expected_files": [
+      "src/prompt.rs"
+    ]
+  },
+  {
+    "category": "core",
+    "query": "src/session/persistence.rs session storage persistence",
+    "expected_files": [
+      "src/session/persistence.rs"
+    ]
+  },
+  {
+    "category": "core",
+    "query": "src/session/journal.rs session journal events",
+    "expected_files": [
+      "src/session/journal.rs"
+    ]
+  },
+  {
+    "category": "config",
+    "query": "Cargo.toml workspace members jcode-codebase-retrieval",
+    "expected_files": [
+      "Cargo.toml"
+    ]
+  },
+  {
+    "category": "config",
+    "query": "crates/jcode-codebase-retrieval/Cargo.toml embeddings feature",
+    "expected_files": [
+      "crates/jcode-codebase-retrieval/Cargo.toml"
+    ]
+  },
+  {
+    "category": "config",
+    "query": "Cargo.lock jcode-embedding package",
+    "expected_files": [
+      "Cargo.lock"
+    ]
+  },
+  {
+    "category": "runtime",
+    "query": "src/server/client_session.rs register_selfdev_tools tool registry",
+    "expected_files": [
+      "src/server/client_session.rs"
+    ]
+  },
+  {
+    "category": "runtime",
+    "query": "src/server/headless.rs headless session tools",
+    "expected_files": [
+      "src/server/headless.rs"
+    ]
+  },
+  {
+    "category": "runtime",
+    "query": "src/tui/app/tui_lifecycle_runtime.rs register_selfdev_tools remote startup",
+    "expected_files": [
+      "src/tui/app/tui_lifecycle_runtime.rs"
+    ]
+  },
+  {
+    "category": "runtime",
+    "query": "src/codebase_sync_runtime.rs start_for_session codebase sync background",
+    "expected_files": [
+      "src/codebase_sync_runtime.rs"
+    ]
+  },
+  {
+    "category": "codebase",
+    "query": "crates/jcode-codebase-retrieval/src/query_planner.rs exact path retrieval fixture",
+    "expected_files": [
+      "crates/jcode-codebase-retrieval/src/query_planner.rs"
+    ]
+  },
+  {
+    "category": "codebase",
+    "query": "crates/jcode-codebase-retrieval/src/lexical_index.rs exact path retrieval fixture",
+    "expected_files": [
+      "crates/jcode-codebase-retrieval/src/lexical_index.rs"
+    ]
+  },
+  {
+    "category": "codebase",
+    "query": "crates/jcode-codebase-retrieval/src/lib.rs exact path retrieval fixture",
+    "expected_files": [
+      "crates/jcode-codebase-retrieval/src/lib.rs"
+    ]
+  },
+  {
+    "category": "codebase",
+    "query": "crates/jcode-codebase-retrieval/Cargo.toml exact path retrieval fixture",
+    "expected_files": [
+      "crates/jcode-codebase-retrieval/Cargo.toml"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "crates/jcode-update-core/src/lib.rs exact path retrieval fixture",
+    "expected_files": [
+      "crates/jcode-update-core/src/lib.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "crates/jcode-update-core/Cargo.toml exact path retrieval fixture",
+    "expected_files": [
+      "crates/jcode-update-core/Cargo.toml"
+    ]
+  },
+  {
+    "category": "runtime",
+    "query": "src/session/memory_profile.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/session/memory_profile.rs"
+    ]
+  },
+  {
+    "category": "runtime",
+    "query": "src/session/model.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/session/model.rs"
+    ]
+  },
+  {
+    "category": "runtime",
+    "query": "src/session/active_pids.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/session/active_pids.rs"
+    ]
+  },
+  {
+    "category": "runtime",
+    "query": "src/session/render.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/session/render.rs"
+    ]
+  },
+  {
+    "category": "runtime",
+    "query": "src/session/persistence.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/session/persistence.rs"
+    ]
+  },
+  {
+    "category": "runtime",
+    "query": "src/session/journal.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/session/journal.rs"
+    ]
+  },
+  {
+    "category": "runtime",
+    "query": "src/session/crash.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/session/crash.rs"
+    ]
+  },
+  {
+    "category": "runtime",
+    "query": "src/session/storage_paths.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/session/storage_paths.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "src/stdin_detect.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/stdin_detect.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "src/gmail.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/gmail.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "src/import_tests.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/import_tests.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "src/bus.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/bus.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "src/replay.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/replay.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "src/setup_hints.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/setup_hints.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "src/soft_interrupt_store_tests.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/soft_interrupt_store_tests.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "src/agent_workflow.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/agent_workflow.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "crates/jcode-tui-messages/src/wrapped_line_map.rs exact path retrieval fixture",
+    "expected_files": [
+      "crates/jcode-tui-messages/src/wrapped_line_map.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "crates/jcode-tui-messages/src/lib.rs exact path retrieval fixture",
+    "expected_files": [
+      "crates/jcode-tui-messages/src/lib.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "crates/jcode-tui-messages/src/prepared.rs exact path retrieval fixture",
+    "expected_files": [
+      "crates/jcode-tui-messages/src/prepared.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "crates/jcode-tui-messages/src/cache.rs exact path retrieval fixture",
+    "expected_files": [
+      "crates/jcode-tui-messages/src/cache.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "crates/jcode-tui-messages/src/message.rs exact path retrieval fixture",
+    "expected_files": [
+      "crates/jcode-tui-messages/src/message.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "crates/jcode-tui-messages/Cargo.toml exact path retrieval fixture",
+    "expected_files": [
+      "crates/jcode-tui-messages/Cargo.toml"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "src/gateway/auth.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/gateway/auth.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "src/gateway/registry.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/gateway/registry.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "crates/jcode-agent-runtime/src/lib.rs exact path retrieval fixture",
+    "expected_files": [
+      "crates/jcode-agent-runtime/src/lib.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "crates/jcode-agent-runtime/Cargo.toml exact path retrieval fixture",
+    "expected_files": [
+      "crates/jcode-agent-runtime/Cargo.toml"
+    ]
+  },
+  {
+    "category": "codebase",
+    "query": "crates/jcode-codebase-sync/src/ast.rs exact path retrieval fixture",
+    "expected_files": [
+      "crates/jcode-codebase-sync/src/ast.rs"
+    ]
+  },
+  {
+    "category": "codebase",
+    "query": "crates/jcode-codebase-sync/src/lib.rs exact path retrieval fixture",
+    "expected_files": [
+      "crates/jcode-codebase-sync/src/lib.rs"
+    ]
+  },
+  {
+    "category": "codebase",
+    "query": "crates/jcode-codebase-sync/Cargo.toml exact path retrieval fixture",
+    "expected_files": [
+      "crates/jcode-codebase-sync/Cargo.toml"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/gmail.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/gmail.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/codebase_search.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/codebase_search.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/agent_workflow.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/agent_workflow.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/mcp.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/mcp.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/websearch.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/websearch.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/glob.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/glob.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/browser.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/browser.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/commit_lineage_search.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/commit_lineage_search.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/session_search.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/session_search.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/side_panel_tests.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/side_panel_tests.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/sync_drain.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/sync_drain.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/lsp.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/lsp.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/agentgrep.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/agentgrep.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/apply_patch_tests.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/apply_patch_tests.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/multiedit.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/multiedit.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/open.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/open.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/read_file_tests.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/read_file_tests.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/tests.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/tests.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/codebase_search_tests.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/codebase_search_tests.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/webfetch.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/webfetch.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/codebase_impact.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/codebase_impact.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/todo.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/todo.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/codebase_route_map.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/codebase_route_map.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/goal.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/goal.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/read_file.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/read_file.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/read.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/read.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/mod.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/mod.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/communicate_tests.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/communicate_tests.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/codesearch.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/codesearch.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/bg.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/bg.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/task.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/task.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "crates/jcode-provider-openrouter/src/lib.rs exact path retrieval fixture",
+    "expected_files": [
+      "crates/jcode-provider-openrouter/src/lib.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/communicate_tests/assignment.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/communicate_tests/assignment.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "crates/jcode-provider-openrouter/Cargo.toml exact path retrieval fixture",
+    "expected_files": [
+      "crates/jcode-provider-openrouter/Cargo.toml"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/communicate_tests/end_to_end.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/communicate_tests/end_to_end.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/communicate_tests/input_format.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/communicate_tests/input_format.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/skill.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/skill.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/communicate.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/communicate.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/patch.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/patch.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/ambient/tests.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/ambient/tests.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/open_tests.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/open_tests.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "crates/jcode-build-support/src/tests.rs exact path retrieval fixture",
+    "expected_files": [
+      "crates/jcode-build-support/src/tests.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "crates/jcode-build-support/src/storage_helpers.rs exact path retrieval fixture",
+    "expected_files": [
+      "crates/jcode-build-support/src/storage_helpers.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "crates/jcode-build-support/src/paths.rs exact path retrieval fixture",
+    "expected_files": [
+      "crates/jcode-build-support/src/paths.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "crates/jcode-build-support/src/lib.rs exact path retrieval fixture",
+    "expected_files": [
+      "crates/jcode-build-support/src/lib.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "crates/jcode-build-support/src/source_state.rs exact path retrieval fixture",
+    "expected_files": [
+      "crates/jcode-build-support/src/source_state.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "crates/jcode-build-support/src/platform_support.rs exact path retrieval fixture",
+    "expected_files": [
+      "crates/jcode-build-support/src/platform_support.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "crates/jcode-build-support/Cargo.toml exact path retrieval fixture",
+    "expected_files": [
+      "crates/jcode-build-support/Cargo.toml"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/read/tests.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/read/tests.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/write.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/write.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/selfdev/launch.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/selfdev/launch.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/selfdev/tests.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/selfdev/tests.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/selfdev/status.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/selfdev/status.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/selfdev/mod.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/selfdev/mod.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/selfdev/reload.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/selfdev/reload.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/selfdev/build_queue.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/selfdev/build_queue.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/memory.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/memory.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/batch_tests.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/batch_tests.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/apply_patch.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/apply_patch.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/codebase_changes.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/codebase_changes.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/goal_tests.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/goal_tests.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/session_search_tests.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/session_search_tests.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/commit_lineage_search_tests.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/commit_lineage_search_tests.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/batch.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/batch.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/bash_tests.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/bash_tests.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/invalid.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/invalid.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/bash.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/bash.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/agentgrep_tests.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/agentgrep_tests.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/debug_socket.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/debug_socket.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/ls.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/ls.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/conversation_search.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/conversation_search.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/ambient.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/ambient.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/browser_tests.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/browser_tests.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "crates/jcode-selfdev-types/src/lib.rs exact path retrieval fixture",
+    "expected_files": [
+      "crates/jcode-selfdev-types/src/lib.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "crates/jcode-selfdev-types/Cargo.toml exact path retrieval fixture",
+    "expected_files": [
+      "crates/jcode-selfdev-types/Cargo.toml"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/communicate/transport.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/communicate/transport.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/sync_status.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/sync_status.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/edit.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/edit.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/side_panel.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/side_panel.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/grep.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/grep.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/codebase_eval.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/codebase_eval.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/agentgrep/context.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/agentgrep/context.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/agentgrep/args.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/agentgrep/args.rs"
+    ]
+  },
+  {
+    "category": "tooling",
+    "query": "src/tool/agentgrep/render.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/tool/agentgrep/render.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "src/setup_hints_tests.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/setup_hints_tests.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "src/platform.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/platform.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "src/browser.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/browser.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "crates/jcode-task-types/src/lib.rs exact path retrieval fixture",
+    "expected_files": [
+      "crates/jcode-task-types/src/lib.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "src/side_panel_tests.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/side_panel_tests.rs"
+    ]
+  },
+  {
+    "category": "codebase",
+    "query": "src/codebase_sync_runtime.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/codebase_sync_runtime.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "src/skill_router.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/skill_router.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "src/soft_interrupt_store.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/soft_interrupt_store.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "src/usage_display.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/usage_display.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "src/compaction.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/compaction.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "src/login_qr.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/login_qr.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "src/startup_profile.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/startup_profile.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "src/memory_tests.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/memory_tests.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "src/notifications.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/notifications.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "src/gateway_tests.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/gateway_tests.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "crates/jcode-task-types/Cargo.toml exact path retrieval fixture",
+    "expected_files": [
+      "crates/jcode-task-types/Cargo.toml"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "src/replay/tests.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/replay/tests.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "src/process_title.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/process_title.rs"
+    ]
+  },
+  {
+    "category": "observability",
+    "query": "src/telemetry/lifecycle.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/telemetry/lifecycle.rs"
+    ]
+  },
+  {
+    "category": "observability",
+    "query": "src/telemetry/tests.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/telemetry/tests.rs"
+    ]
+  },
+  {
+    "category": "observability",
+    "query": "src/telemetry/state_support.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/telemetry/state_support.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "src/config_tests.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/config_tests.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "src/terminal_launch.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/terminal_launch.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "src/storage.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/storage.rs"
+    ]
+  },
+  {
+    "category": "codebase",
+    "query": "src/codebase_context.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/codebase_context.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "src/agent.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/agent.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "src/main.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/main.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "src/todo.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/todo.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "src/dictation_tests.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/dictation_tests.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "src/platform_tests.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/platform_tests.rs"
+    ]
+  },
+  {
+    "category": "exact_path",
+    "query": "src/copilot_usage.rs exact path retrieval fixture",
+    "expected_files": [
+      "src/copilot_usage.rs"
+    ]
+  }
 ]

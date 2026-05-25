@@ -6,9 +6,142 @@ use super::helpers::{
 use super::*;
 use crate::tui::{
     AgentModelTarget, InlineInteractiveState, PickerAction, PickerEntry, PickerKind, PickerOption,
+    WorkflowPickerAction,
 };
 
 impl App {
+    pub(crate) fn maybe_open_workflow_interaction_picker(&mut self) -> bool {
+        if !crate::agent_workflow::enabled()
+            || self.inline_interactive_state.is_some()
+            || !self.input.is_empty()
+        {
+            return false;
+        }
+
+        let pending = self
+            .session
+            .agent_workflow_state
+            .as_ref()
+            .and_then(|state| state.pending_user_interaction.clone())
+            .or_else(|| {
+                let state = self.session.agent_workflow_state.as_ref()?;
+                match state.status.as_str() {
+                    crate::agent_workflow::STATUS_AWAITING_PLAN_APPROVAL => {
+                        Some(crate::agent_workflow::PendingUserInteraction::plan_approval())
+                    }
+                    crate::agent_workflow::STATUS_AWAITING_REVIEW_APPROVAL => {
+                        Some(crate::agent_workflow::PendingUserInteraction::review_approval())
+                    }
+                    _ => None,
+                }
+            });
+
+        let Some(pending) = pending else {
+            return false;
+        };
+        self.open_workflow_interaction_picker(pending);
+        true
+    }
+
+    pub(crate) fn open_workflow_interaction_picker(
+        &mut self,
+        pending: crate::agent_workflow::PendingUserInteraction,
+    ) {
+        let prompt = pending.prompt.clone().unwrap_or_default();
+        let mut entries = match pending.kind {
+            crate::agent_workflow::WorkflowInteractionKind::PlanApproval => vec![
+                workflow_entry(
+                    "Đồng ý triển khai",
+                    "approve",
+                    &prompt,
+                    WorkflowPickerAction::ApprovePlan,
+                ),
+                workflow_entry(
+                    "Góp ý plan",
+                    "feedback",
+                    &prompt,
+                    WorkflowPickerAction::RejectPlan,
+                ),
+            ],
+            crate::agent_workflow::WorkflowInteractionKind::ReviewApproval => vec![
+                workflow_entry(
+                    "Đồng ý nghiệm thu",
+                    "approve",
+                    &prompt,
+                    WorkflowPickerAction::ApproveReview,
+                ),
+                workflow_entry(
+                    "Yêu cầu sửa",
+                    "feedback",
+                    &prompt,
+                    WorkflowPickerAction::RejectReview,
+                ),
+            ],
+            crate::agent_workflow::WorkflowInteractionKind::Question => {
+                let multiple = pending.selection_mode
+                    == crate::agent_workflow::WorkflowSelectionMode::Multiple;
+                let mut rows = pending
+                    .options
+                    .into_iter()
+                    .map(|option| {
+                        let label = option.label;
+                        let action_label = label.clone();
+                        workflow_entry(
+                            &label,
+                            if multiple { "checkbox" } else { "radio" },
+                            option.description.as_deref().unwrap_or(&prompt),
+                            WorkflowPickerAction::SelectQuestionOption {
+                                option_id: option.id,
+                                label: action_label,
+                                multiple,
+                            },
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                if !rows.is_empty() {
+                    rows.push(workflow_entry(
+                        "Gửi lựa chọn",
+                        "send",
+                        &prompt,
+                        WorkflowPickerAction::SubmitQuestionAnswer,
+                    ));
+                }
+                if pending.allow_custom || rows.is_empty() {
+                    rows.push(workflow_entry(
+                        "Nhập ý khác",
+                        "custom",
+                        &prompt,
+                        WorkflowPickerAction::CustomQuestionAnswer,
+                    ));
+                }
+                rows
+            }
+            crate::agent_workflow::WorkflowInteractionKind::SkillApproval => vec![workflow_entry(
+                "Duyệt skill remote",
+                "approve",
+                &prompt,
+                WorkflowPickerAction::CustomQuestionAnswer,
+            )],
+        };
+
+        if entries.is_empty() {
+            return;
+        }
+
+        self.inline_view_state = None;
+        self.inline_interactive_state = Some(InlineInteractiveState {
+            kind: PickerKind::Workflow,
+            filtered: (0..entries.len()).collect(),
+            entries: std::mem::take(&mut entries),
+            selected: 0,
+            column: 0,
+            filter: String::new(),
+            preview: false,
+        });
+        self.input.clear();
+        self.cursor_pos = 0;
+    }
+
     pub(crate) fn open_agents_picker(&mut self) {
         let models = [
             AgentModelTarget::Swarm,
@@ -220,5 +353,32 @@ impl App {
             picker.column = 0;
             picker.filter.clear();
         }
+    }
+}
+
+fn workflow_entry(
+    name: &str,
+    action_label: &str,
+    detail: &str,
+    action: WorkflowPickerAction,
+) -> PickerEntry {
+    PickerEntry {
+        name: name.to_string(),
+        options: vec![PickerOption {
+            provider: String::new(),
+            api_method: action_label.to_string(),
+            available: true,
+            detail: detail.to_string(),
+            estimated_reference_cost_micros: None,
+        }],
+        action: PickerAction::Workflow(action),
+        selected_option: 0,
+        is_current: false,
+        is_default: false,
+        recommended: false,
+        recommendation_rank: usize::MAX,
+        old: false,
+        created_date: None,
+        effort: None,
     }
 }

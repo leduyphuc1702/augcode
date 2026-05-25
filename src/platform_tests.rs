@@ -14,11 +14,11 @@ fn spawn_detached_creates_new_session() {
 
     let output = NamedTempFile::new().expect("temp file");
     let output_path = output.path().to_string_lossy().to_string();
-    let parent_sid = unsafe { libc::getsid(0) };
+    let parent_pgid = unsafe { libc::getpgrp() };
 
     let mut cmd = std::process::Command::new("sh");
     cmd.arg("-c")
-        .arg("ps -o sid= -p $$ > \"$JCODE_TEST_OUTPUT\"")
+        .arg("ps -o pgid= -p $$ > \"$JCODE_TEST_OUTPUT\"")
         .env("JCODE_TEST_OUTPUT", &output_path)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
@@ -27,20 +27,20 @@ fn spawn_detached_creates_new_session() {
     let status = child.wait().expect("wait for child");
     assert!(status.success(), "child should exit successfully");
 
-    let child_sid = std::fs::read_to_string(&output_path)
+    let child_pgid = std::fs::read_to_string(&output_path)
         .expect("read child sid")
         .trim()
         .parse::<u32>()
         .expect("parse child sid");
 
     assert_eq!(
-        child_sid,
+        child_pgid,
         child.id(),
-        "detached child should lead its own session"
+        "detached child should lead its own process group"
     );
     assert_ne!(
-        child_sid as i32, parent_sid,
-        "detached child should not share parent session"
+        child_pgid as i32, parent_pgid,
+        "detached child should not share parent process group"
     );
 }
 

@@ -1,7 +1,6 @@
 use super::ClientConnectionInfo;
 use super::server_has_newer_binary;
 use crate::agent::Agent;
-use crate::bus::Bus;
 use crate::message::{ContentBlock, Role};
 use crate::protocol::{HistoryMessage, ServerEvent, SessionActivitySnapshot, encode_event};
 use crate::provider::Provider;
@@ -9,7 +8,7 @@ use crate::session::{Session, SessionStatus};
 use crate::transport::WriteHalf;
 use anyhow::Result;
 use std::collections::{BTreeMap, HashMap};
-use std::sync::{Arc, LazyLock, Mutex as StdMutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 type SessionAgents = Arc<RwLock<HashMap<String, Arc<Mutex<Agent>>>>>;
 
@@ -20,27 +19,7 @@ pub(super) enum HistoryPayloadMode {
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{Mutex, RwLock};
 
-const ATTACH_MODEL_PREFETCH_DEBOUNCE_SECS: u64 = 15;
 const RELOAD_RESTORE_MARKER_MAX_AGE: Duration = Duration::from_secs(60);
-
-static LAST_ATTACH_MODEL_PREFETCH: LazyLock<StdMutex<HashMap<String, Instant>>> =
-    LazyLock::new(|| StdMutex::new(HashMap::new()));
-
-fn should_debounce_attach_model_prefetch(provider_name: &str) -> bool {
-    let Ok(mut guard) = LAST_ATTACH_MODEL_PREFETCH.lock() else {
-        return false;
-    };
-
-    let now = Instant::now();
-    if let Some(last_run) = guard.get(provider_name)
-        && now.duration_since(*last_run) < Duration::from_secs(ATTACH_MODEL_PREFETCH_DEBOUNCE_SECS)
-    {
-        return true;
-    }
-
-    guard.insert(provider_name.to_string(), now);
-    false
-}
 
 pub(super) async fn handle_get_state(
     id: u64,
@@ -739,47 +718,7 @@ async fn write_event(writer: &Arc<Mutex<WriteHalf>>, event: &ServerEvent) -> Res
     Ok(())
 }
 
-pub(super) fn spawn_model_prefetch_update(provider: Arc<dyn Provider>, agent: Arc<Mutex<Agent>>) {
-    tokio::spawn(async move {
-        let (provider_name, initial_models) = {
-            let agent_guard = agent.lock().await;
-            (
-                agent_guard.provider_name(),
-                agent_guard.available_models_display(),
-            )
-        };
-
-        if !initial_models.is_empty() {
-            return;
-        }
-
-        if should_debounce_attach_model_prefetch(&provider_name) {
-            crate::logging::info(&format!(
-                "Skipping attach-time model prefetch for {} because a recent refresh already ran",
-                provider_name
-            ));
-            return;
-        }
-
-        if provider.prefetch_models().await.is_err() {
-            return;
-        }
-
-        let refreshed = {
-            let agent_guard = agent.lock().await;
-            (
-                agent_guard.available_models_display(),
-                agent_guard.model_routes(),
-            )
-        };
-
-        if refreshed.0 == initial_models && refreshed.1.is_empty() {
-            return;
-        }
-
-        let _ = refreshed;
-        Bus::global().publish_models_updated();
-    });
+pub(super) fn spawn_model_prefetch_update(_provider: Arc<dyn Provider>, _agent: Arc<Mutex<Agent>>) {
 }
 
 #[cfg(test)]

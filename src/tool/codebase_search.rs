@@ -2,7 +2,8 @@ use super::{Tool, ToolContext, ToolOutput};
 use anyhow::Result;
 use async_trait::async_trait;
 use jcode_codebase_retrieval::{
-    CodebaseRetrievalEngine, RetrievalRequest, UnsavedBuffer, root_from_context_path,
+    CodebaseRetrievalEngine, RetrievalRequest, RetrievalUsageTrace, UnsavedBuffer,
+    record_retrieval_usage_trace, root_from_context_path,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -24,6 +25,8 @@ struct CodebaseSearchInput {
     token_budget: Option<usize>,
     #[serde(default)]
     unsaved_buffers: Vec<UnsavedBuffer>,
+    #[serde(default)]
+    include_trace: bool,
 }
 
 #[async_trait]
@@ -54,6 +57,10 @@ impl Tool for CodebaseSearchTool {
                     "type": "integer",
                     "description": "Approximate output token budget."
                 },
+                "include_trace": {
+                    "type": "boolean",
+                    "description": "Include retrieval ranking and token trace in the output."
+                },
                 "unsaved_buffers": {
                     "type": "array",
                     "description": "Optional editor buffers that have not been saved yet.",
@@ -81,8 +88,39 @@ impl Tool for CodebaseSearchTool {
                 active_file: params.active_file,
                 token_budget: params.token_budget,
                 unsaved_buffers: params.unsaved_buffers,
+                include_trace: params.include_trace,
             },
         )?;
+        let _ = record_retrieval_usage_trace(
+            &root,
+            &RetrievalUsageTrace {
+                timestamp: chrono::Utc::now().to_rfc3339(),
+                session_id: ctx.session_id,
+                message_id: ctx.message_id,
+                tool_call_id: ctx.tool_call_id,
+                tool_name: "codebase_search".to_string(),
+                event_kind: "retrieval_context".to_string(),
+                action_kind: Some("retrieval_context".to_string()),
+                command_label: None,
+                paths: response
+                    .context_pack
+                    .files
+                    .iter()
+                    .map(|file| file.path.clone())
+                    .collect(),
+                context_token_estimate: response
+                    .context_pack
+                    .files
+                    .iter()
+                    .map(|file| file.token_estimate)
+                    .sum(),
+                context_used_token_estimate: 0,
+                context_waste_after_turn_bps: 0,
+                edit_hit_rate_bps: 0,
+                test_hit_rate_bps: 0,
+                retrieval_to_edit_distance: None,
+            },
+        );
         Ok(ToolOutput::new(render_response(&response))
             .with_title(format!("codebase_search: {}", params.query)))
     }
@@ -116,6 +154,41 @@ fn render_response(response: &jcode_codebase_retrieval::SearchResponse) -> Strin
             "\nomitted: {} ({})\n",
             omitted.count, omitted.reason
         ));
+    }
+    if let Some(trace) = &response.trace {
+        out.push_str(&format!(
+            "\ntrace: candidates={} returned={} omitted={} token_used={} budget={}\n",
+            trace.candidate_count,
+            trace.returned_count,
+            trace.omitted_count,
+            trace.token_used,
+            trace.token_budget
+        ));
+        for candidate in trace.candidates.iter().take(40) {
+            out.push_str(&format!(
+                "- {} [{}] score={}/{} tokens={} lines {}-{} kind={} edge={} reason={}{}{}\n",
+                candidate.path,
+                candidate.source,
+                candidate.raw_score,
+                candidate.final_score,
+                candidate.token_estimate,
+                candidate.start_line,
+                candidate.end_line,
+                candidate.node_kind.as_deref().unwrap_or("file"),
+                candidate.edge_kind.as_deref().unwrap_or(""),
+                candidate.reason,
+                candidate
+                    .omitted_reason
+                    .as_ref()
+                    .map(|reason| format!(" omitted={reason}"))
+                    .unwrap_or_default(),
+                if candidate.graph_path.is_empty() {
+                    String::new()
+                } else {
+                    format!(" graph_path={}", candidate.graph_path.join(" -> "))
+                }
+            ));
+        }
     }
     out
 }

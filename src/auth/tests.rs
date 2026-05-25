@@ -64,6 +64,31 @@ fn auth_status_default_all_not_configured() {
 }
 
 #[test]
+fn browser_is_suppressed_during_tests() {
+    assert!(browser_suppressed(false));
+}
+
+#[test]
+fn auth_login_browser_openers_are_centralized() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    for relative in [
+        "src/auth/oauth.rs",
+        "src/auth/google.rs",
+        "src/auth/gemini.rs",
+        "src/auth/antigravity.rs",
+        "src/cli/login.rs",
+        "src/tui/app/auth.rs",
+    ] {
+        let path = root.join(relative);
+        let source = std::fs::read_to_string(&path).expect("read source file");
+        assert!(
+            !source.contains("open::that(") && !source.contains("open::that_detached("),
+            "{relative} must use crate::auth::open_browser_for_auth* so tests cannot open real login tabs"
+        );
+    }
+}
+
+#[test]
 fn auth_status_check_fast_includes_bedrock_probe() {
     let _lock = crate::storage::lock_test_env();
     let prev_bedrock_enable = std::env::var_os("JCODE_BEDROCK_ENABLE");
@@ -103,6 +128,7 @@ fn full_and_fast_auth_status_match_for_shared_probe_fields() {
         "JCODE_OPENROUTER_MODEL_CATALOG",
         "JCODE_OPENROUTER_STATIC_MODELS",
         "JCODE_OPENROUTER_MODEL",
+        "JCODE_OPENAI_COMPAT_MODELS",
         "JCODE_OPENROUTER_DYNAMIC_BEARER_PROVIDER",
         crate::auth::azure::ENDPOINT_ENV,
         crate::auth::azure::API_KEY_ENV,
@@ -141,6 +167,7 @@ fn full_and_fast_auth_status_match_for_shared_probe_fields() {
         "JCODE_OPENROUTER_MODEL_CATALOG",
         "JCODE_OPENROUTER_STATIC_MODELS",
         "JCODE_OPENROUTER_MODEL",
+        "JCODE_OPENAI_COMPAT_MODELS",
         "JCODE_OPENROUTER_DYNAMIC_BEARER_PROVIDER",
     ] {
         crate::env::remove_var(key);

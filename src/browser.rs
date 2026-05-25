@@ -794,6 +794,11 @@ async fn install_extension() -> Result<String> {
         .map_err(|_| anyhow::anyhow!("Could not convert XPI path to file URL: {}", xpi.display()))?
         .to_string();
 
+    if crate::util::system_open_suppressed_for_tests() {
+        msg.push_str("       Browser open suppressed in test mode.\n");
+        return Ok(msg);
+    }
+
     #[cfg(target_os = "linux")]
     {
         let _ = tokio::process::Command::new("xdg-open")

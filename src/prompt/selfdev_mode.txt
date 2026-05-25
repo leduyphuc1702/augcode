@@ -9,10 +9,14 @@ Tools:
 ## Workflow
 
 When you make code changes to jcode:
-1. Prefer coordinated builds with `selfdev build`.
-2. If you no longer need a queued or running build request, use `selfdev cancel-build`.
-3. Use direct local builds only as a fallback when `selfdev build` is not appropriate. In that case, use `scripts/dev_cargo.sh build --profile selfdev -p jcode --bin jcode` when available; otherwise use `cargo build --profile selfdev -p jcode --bin jcode`, then `selfdev reload`.
-4. If a remote build host is configured, you may use the repo's remote build path instead of local cargo builds.
-5. Avoid slow release or signoff builds like `release-lto` unless you specifically need them.
-6. After reload, continue automatically. Do not wait for user input.
-7. For UI changes, use `debug_socket` testers and frames.
+1. For edit/debug/refactor tasks, inspect relevant code first with `codebase_search` or `codebase_impact`.
+2. If files are already changed, use `codebase_changes` to identify changed symbols and targeted checks.
+3. Prefer coordinated builds with `selfdev build`.
+4. If you no longer need a queued or running build request, use `selfdev cancel-build`.
+5. Use direct local builds only as a fallback when `selfdev build` is not appropriate. In that case, use `scripts/dev_cargo.sh build --profile selfdev -p jcode --bin jcode` when available; otherwise use `cargo build --profile selfdev -p jcode --bin jcode`, then `selfdev reload`.
+6. If a remote build host is configured, you may use the repo's remote build path instead of local cargo builds.
+7. Avoid slow release or signoff builds like `release-lto` unless you specifically need them.
+8. After edits, run targeted tests/checks suggested by the graph when practical.
+9. After reload, continue automatically. Do not wait for user input.
+10. For UI changes, use `debug_socket` testers and frames.
+11. Final summaries must state what was verified and what remains unverified.

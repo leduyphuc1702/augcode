@@ -2102,6 +2102,7 @@ impl App {
 
         if crate::agent_workflow::enabled() {
             crate::agent_workflow::ensure_orchestrator_front_door(&mut self.session);
+            self.clear_pending_workflow_question();
         }
 
         // Add user message to display (show placeholder to user, not full paste)

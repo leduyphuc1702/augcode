@@ -641,6 +641,9 @@ impl SessionPicker {
         } else {
             configured
         };
+        if targets.len() > 1 {
+            return PickerResult::SelectedInNewTerminal(targets);
+        }
         match action {
             crate::config::SessionPickerResumeAction::NewTerminal => {
                 PickerResult::SelectedInNewTerminal(targets)

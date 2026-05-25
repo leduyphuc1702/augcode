@@ -147,4 +147,6 @@ pub(crate) enum AccountCommand {
     SetOpenAiCompatApiKeyName(Option<String>),
     SetOpenAiCompatEnvFile(Option<String>),
     SetOpenAiCompatDefaultModel(Option<String>),
+    AddOpenAiCompatModel(String),
+    RemoveOpenAiCompatModel(String),
 }

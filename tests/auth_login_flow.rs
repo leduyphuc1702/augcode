@@ -40,6 +40,7 @@ fn tracked_env_vars() -> Vec<String> {
         "JCODE_OPENROUTER_MODEL_CATALOG",
         "JCODE_OPENROUTER_MODEL",
         "JCODE_OPENROUTER_STATIC_MODELS",
+        "JCODE_OPENAI_COMPAT_MODELS",
         "JCODE_OPENROUTER_AUTH_HEADER",
         "JCODE_OPENROUTER_AUTH_HEADER_NAME",
         "JCODE_OPENROUTER_DYNAMIC_BEARER_PROVIDER",
@@ -366,10 +367,10 @@ fn local_no_auth_models_contract_sends_no_auth_header() -> Result<()> {
 }
 
 #[test]
-fn model_picker_cache_miss_schedules_single_background_refresh_and_updates_routes() -> Result<()> {
+fn model_picker_cache_miss_does_not_schedule_background_refresh() -> Result<()> {
     let env = TestEnv::new()?;
     let server = spawn_models_server(
-        2,
+        1,
         r#"{"data":[{"id":"background-race-live-model","object":"model"}]}"#,
         Duration::from_millis(25),
     );
@@ -396,42 +397,25 @@ fn model_picker_cache_miss_schedules_single_background_refresh_and_updates_route
                 .any(|model| model == "background-race-selected-model")
         );
 
-        for _ in 0..100 {
-            if provider
-                .available_models_display()
-                .iter()
-                .any(|model| model == "background-race-live-model")
-            {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-
         let display = provider.available_models_display();
         assert!(
-            display
+            !display
                 .iter()
                 .any(|model| model == "background-race-live-model"),
-            "background refresh should update picker models; display={display:?}"
-        );
-        let routes = provider.model_routes();
-        assert!(
-            routes.iter().any(|route| {
-                route.model == "background-race-live-model"
-                    && route.api_method == "openai-compatible"
-                    && route.available
-            }),
-            "background refresh should update model routes; routes={routes:?}"
+            "picker should not learn live models without explicit refresh; display={display:?}"
         );
     });
 
-    let request = server.requests.recv_timeout(Duration::from_secs(2))?;
-    assert_models_request(&request);
-    std::thread::sleep(Duration::from_millis(100));
+    assert!(
+        server
+            .requests
+            .recv_timeout(Duration::from_millis(100))
+            .is_err()
+    );
     assert_eq!(
         server.request_count.load(Ordering::SeqCst),
-        1,
-        "concurrent picker renders should coalesce into one background /models request"
+        0,
+        "picker should not call /models"
     );
 
     Ok(())

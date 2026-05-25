@@ -1,5 +1,6 @@
 use super::*;
 use std::ffi::OsString;
+use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
 static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -39,6 +40,31 @@ impl Drop for EnvVarGuard {
             crate::env::remove_var(self.key);
         }
     }
+}
+
+struct CurrentDirGuard {
+    original: PathBuf,
+}
+
+impl CurrentDirGuard {
+    fn capture() -> anyhow::Result<Self> {
+        Ok(Self {
+            original: std::env::current_dir()?,
+        })
+    }
+}
+
+impl Drop for CurrentDirGuard {
+    fn drop(&mut self) {
+        let _ = std::env::set_current_dir(&self.original);
+    }
+}
+
+fn canonical_display(path: &std::path::Path) -> String {
+    std::fs::canonicalize(path)
+        .unwrap_or_else(|_| path.to_path_buf())
+        .display()
+        .to_string()
 }
 
 #[path = "cases.rs"]

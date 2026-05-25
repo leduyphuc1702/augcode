@@ -676,10 +676,14 @@ impl BashTool {
                             loop {
                                 #[cfg(target_os = "linux")]
                                 let state = stdin_detect::linux::check_process_tree(child_pid);
-                                #[cfg(not(target_os = "linux"))]
+                                #[cfg(target_os = "macos")]
+                                let state = stdin_detect::macos::check_process_tree(child_pid);
+                                #[cfg(not(any(target_os = "linux", target_os = "macos")))]
                                 let state = stdin_detect::is_waiting_for_stdin(child_pid);
 
-                                if state == StdinState::Reading {
+                                if state == StdinState::Reading
+                                    || (cfg!(target_os = "macos") && state == StdinState::Unknown)
+                                {
                                     request_counter += 1;
                                     let request_id =
                                         format!("stdin-{}-{}", tool_call_id, request_counter);

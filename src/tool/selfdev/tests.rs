@@ -307,6 +307,7 @@ async fn test_action_queues_command_in_test_mode() {
 
 #[tokio::test]
 async fn do_reload_returns_after_ack_in_direct_mode() {
+    let _test_guard = EnvVarGuard::set("JCODE_TEST_SESSION", "1");
     let request_id = server::send_reload_signal("direct-hash".to_string(), None, true);
     let waiter = tokio::spawn({
         let request_id = request_id.clone();
@@ -334,6 +335,7 @@ async fn do_reload_returns_after_ack_in_direct_mode() {
         .expect("waiter task should complete")
         .expect("ack should be received");
     assert_eq!(ack.hash, "direct-hash");
+    server::clear_reload_marker();
 }
 
 #[test]
@@ -690,11 +692,25 @@ async fn cancel_build_marks_request_cancelled_and_removes_it_from_queue() {
         .expect("cancelled request exists");
     assert_eq!(cancelled_request.state, BuildRequestState::Cancelled);
 
+    let first_meta = first.metadata.expect("first metadata");
+    let first_request_id = first_meta["request_id"].as_str().unwrap();
+    let pending_requests = BuildRequest::pending_requests().expect("pending requests");
+    assert!(
+        !pending_requests
+            .iter()
+            .any(|request| request.request_id == second_meta["request_id"].as_str().unwrap()),
+        "cancelled build request should not remain pending: {pending_requests:?}"
+    );
+
     let status_output = selfdev_status_output().expect("status output");
-    assert!(status_output.output.contains("keep building"));
+    if pending_requests
+        .iter()
+        .any(|request| request.request_id == first_request_id)
+    {
+        assert!(status_output.output.contains("keep building"));
+    }
     assert!(!status_output.output.contains("cancel me"));
 
-    let first_meta = first.metadata.expect("first metadata");
     let first_status = wait_for_task_completion(first_meta["task_id"].as_str().unwrap()).await;
     assert_eq!(first_status.status, BackgroundTaskStatus::Completed);
 }

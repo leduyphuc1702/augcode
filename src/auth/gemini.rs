@@ -7,8 +7,8 @@ const GOOGLE_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const GOOGLE_USERINFO_URL: &str = "https://www.googleapis.com/oauth2/v2/userinfo";
 pub const GEMINI_MANUAL_REDIRECT_URI: &str = "https://codeassist.google.com/authcode";
 pub const GEMINI_CLI_AUTH_SOURCE_ID: &str = "gemini_cli_oauth_creds";
-// OAuth credentials must be supplied through env vars. Do not embed client secrets.
-const GEMINI_CLIENT_ID: &str = "";
+const GEMINI_CLIENT_ID: &str =
+    "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com";
 const GEMINI_CLIENT_SECRET: &str = "";
 // Env vars can provide credentials if needed
 const GEMINI_CLIENT_ID_ENV: &str = "GEMINI_CLIENT_ID";
@@ -20,11 +20,19 @@ const GEMINI_SCOPES: &[&str] = &[
 ];
 
 fn gemini_client_id() -> String {
-    std::env::var(GEMINI_CLIENT_ID_ENV).unwrap_or_else(|_| GEMINI_CLIENT_ID.to_string())
+    std::env::var(GEMINI_CLIENT_ID_ENV)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| GEMINI_CLIENT_ID.to_string())
 }
 
 fn gemini_client_secret() -> String {
-    std::env::var(GEMINI_CLIENT_SECRET_ENV).unwrap_or_else(|_| GEMINI_CLIENT_SECRET.to_string())
+    std::env::var(GEMINI_CLIENT_SECRET_ENV)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| GEMINI_CLIENT_SECRET.to_string())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -300,7 +308,7 @@ pub async fn login(no_browser: bool) -> Result<GeminiTokens> {
             eprintln!("{qr}\n");
         }
 
-        let browser_opened = open::that(&auth_url).is_ok();
+        let browser_opened = crate::auth::open_browser_for_auth(&auth_url, no_browser);
         if browser_opened {
             eprintln!(
                 "Waiting up to 300s for automatic callback on {}",
@@ -365,9 +373,7 @@ async fn manual_login(
     ) {
         eprintln!("{qr}\n");
     }
-    if !crate::auth::browser_suppressed(no_browser) {
-        let _ = open::that(&auth_url);
-    }
+    crate::auth::open_browser_for_auth(&auth_url, no_browser);
     eprintln!("After approving access, Google will show an authorization code. Paste it below.\n");
     eprint!("Authorization code: ");
     io::stdout().flush()?;

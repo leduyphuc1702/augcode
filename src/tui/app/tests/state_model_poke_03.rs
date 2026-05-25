@@ -477,7 +477,7 @@ fn test_model_picker_reuses_cached_entries_until_invalidated() {
 }
 
 #[test]
-fn test_tui_api_key_auth_refreshes_catalog_shows_diff_without_opening_picker() {
+fn test_tui_api_key_auth_uses_configured_routes_without_opening_picker() {
     ensure_test_jcode_home_if_unset();
     clear_persisted_test_ui_state();
     crate::tui::ui::clear_test_render_state_for_tests();
@@ -511,11 +511,11 @@ fn test_tui_api_key_auth_refreshes_catalog_shows_diff_without_opening_picker() {
     );
     assert_eq!(
         app.status_notice(),
-        Some("StateSpace: fetching models...".to_string())
+        Some("StateSpace: ready".to_string())
     );
     assert!(
         app.inline_interactive_state.is_none(),
-        "auth-triggered discovery should not open /model automatically"
+        "auth-triggered activation should not open /model automatically"
     );
 
     let activation = rt.block_on(async {
@@ -529,8 +529,8 @@ fn test_tui_api_key_auth_refreshes_catalog_shows_diff_without_opening_picker() {
     });
     assert_eq!(
         refreshes.load(Ordering::SeqCst),
-        1,
-        "auth completion must refresh the model catalog exactly once"
+        0,
+        "auth completion must not refresh the model catalog automatically"
     );
 
     super::local::handle_bus_event(&mut app, Ok(activation));
@@ -540,9 +540,8 @@ fn test_tui_api_key_auth_refreshes_catalog_shows_diff_without_opening_picker() {
     );
     assert_eq!(app.session.model.as_deref(), Some("state-space-alpha"));
     let last = app.display_messages.last().expect("activation message");
-    assert!(last.content.contains("Added models:"));
+    assert!(last.content.contains("Switched to configured model"));
     assert!(last.content.contains("`state-space-alpha`"));
-    assert!(last.content.contains("`state-space-beta`"));
     assert!(last.content.contains("Use `/model`"));
     assert!(!last.content.contains("model picker is open"));
 
@@ -627,14 +626,14 @@ fn test_tui_cerebras_paste_key_lifecycle_has_no_degraded_success_messages() {
     app.handle_login_input(pending, "test-cerebras-key".to_string());
 
     let mut saw_saved = false;
-    let mut saw_catalog_started = false;
+    let mut saw_ready_activity = false;
     let mut saw_activation = false;
     let mut login_success_events = 0;
     let mut login_failure_events = 0;
     let mut catalog_warning_events = 0;
     let mut activation_events = 0;
     rt.block_on(async {
-        while !(saw_saved && saw_catalog_started && saw_activation) {
+        while !(saw_saved && saw_ready_activity && saw_activation) {
             match tokio::time::timeout(Duration::from_secs(2), bus_rx.recv()).await {
                 Ok(Ok(crate::bus::BusEvent::LoginCompleted(login))) => {
                     if login.success {
@@ -650,7 +649,7 @@ fn test_tui_cerebras_paste_key_lifecycle_has_no_degraded_success_messages() {
                             .message
                             .contains("Stored at `~/.config/jcode/cerebras.env`.")
                     );
-                    assert!(login.message.contains("Fetching models now."));
+                    assert!(login.message.contains("Model list uses configured models only."));
                     assert!(!login.message.contains("did not switch models"));
                     app.handle_login_completed(login);
                     saw_saved = true;
@@ -669,8 +668,8 @@ fn test_tui_cerebras_paste_key_lifecycle_has_no_degraded_success_messages() {
                         "unexpected degraded activity: {}",
                         activity.message
                     );
-                    if activity.message.contains("Model Discovery Started") {
-                        saw_catalog_started = true;
+                    if activity.message.contains("**Cerebras Ready**") {
+                        saw_ready_activity = true;
                     }
                     super::local::handle_bus_event(
                         &mut app,
@@ -865,12 +864,8 @@ fn test_tui_openai_compatible_empty_catalog_does_not_switch_to_profile_default()
                     panic!("empty catalog must not activate a provider model")
                 }
                 Ok(Ok(crate::bus::BusEvent::LoginCompleted(login))) => {
-                    panic!("empty local catalog must not publish final login failure: {login:?}")
-                }
-                Ok(Ok(crate::bus::BusEvent::UiActivity(activity)))
-                    if activity.message.contains("Model Discovery Still Updating") =>
-                {
-                    break activity;
+                    assert!(login.success, "empty local catalog should be ready: {login:?}");
+                    break login;
                 }
                 Ok(Ok(_)) => continue,
                 other => panic!("expected pending catalog activity, got {other:?}"),
@@ -878,17 +873,15 @@ fn test_tui_openai_compatible_empty_catalog_does_not_switch_to_profile_default()
         }
     });
 
-    assert_eq!(refreshes.load(Ordering::SeqCst), 1);
+    assert_eq!(refreshes.load(Ordering::SeqCst), 0);
     assert_eq!(
         set_model_attempts.load(Ordering::SeqCst),
         0,
         "post-login activation must not try the metadata default when the catalog has no selectable route"
     );
-    assert!(activity.message.contains("Saved credentials are active"));
-    assert!(activity.message.contains("Jcode is still processing"));
+    assert!(activity.message.contains("Saved credentials"));
+    assert!(activity.message.contains("Add a model"));
     assert!(!activity.message.contains("did not switch models"));
-    assert!(!activity.message.contains("documented default"));
-    assert!(!activity.message.contains("qwen-3-coder-480b"));
 }
 
 #[test]
@@ -925,14 +918,8 @@ fn test_tui_openai_compatible_local_refresh_failure_is_pending_not_final_failure
                     panic!("failing local refresh must not activate a provider model")
                 }
                 Ok(Ok(crate::bus::BusEvent::LoginCompleted(login))) => {
-                    panic!(
-                        "local refresh failure must not publish a final login failure while server auth-change recovery can still finish: {login:?}"
-                    )
-                }
-                Ok(Ok(crate::bus::BusEvent::UiActivity(activity)))
-                    if activity.message.contains("Model Discovery Still Updating") =>
-                {
-                    break activity;
+                    assert!(login.success, "manual-only login should be ready: {login:?}");
+                    break login;
                 }
                 Ok(Ok(_)) => continue,
                 other => panic!("expected pending catalog activity, got {other:?}"),
@@ -940,15 +927,14 @@ fn test_tui_openai_compatible_local_refresh_failure_is_pending_not_final_failure
         }
     });
 
-    assert_eq!(refreshes.load(Ordering::SeqCst), 1);
+    assert_eq!(refreshes.load(Ordering::SeqCst), 0);
     assert_eq!(
         set_model_attempts.load(Ordering::SeqCst),
         0,
         "local refresh failure must not try to switch models from an unavailable catalog"
     );
-    assert!(activity.message.contains("Saved credentials are active"));
-    assert!(activity.message.contains("server auth-change catalog refresh"));
-    assert!(activity.message.contains("fixture refresh failed"));
+    assert!(activity.message.contains("Saved credentials"));
+    assert!(activity.message.contains("Add a model"));
     assert!(!activity.message.contains("Login: failed"));
     assert!(!activity.message.contains("Unable to sign in"));
     assert!(!activity.message.contains("did not switch models"));

@@ -466,11 +466,7 @@ pub async fn login_claude(no_browser: bool) -> Result<OAuthTokens> {
             eprintln!("{qr}\n");
         }
         eprintln!("Opening browser for Claude login...\n");
-        let browser_opened = if crate::auth::browser_suppressed(no_browser) {
-            false
-        } else {
-            open::that(&auth_url).is_ok()
-        };
+        let browser_opened = crate::auth::open_browser_for_auth(&auth_url, no_browser);
         if browser_opened {
             eprintln!(
                 "Waiting up to 120s for automatic callback on {}",
@@ -531,9 +527,7 @@ pub async fn login_claude(no_browser: bool) -> Result<OAuthTokens> {
         eprintln!("{qr}\n");
     }
     eprintln!("Opening browser for Claude login...\n");
-    if !crate::auth::browser_suppressed(no_browser) {
-        let _ = open::that(&auth_url);
-    }
+    crate::auth::open_browser_for_auth(&auth_url, no_browser);
     eprintln!("After logging in, copy and paste the callback URL or code here:\n");
     eprint!("> ");
     std::io::stdout().flush()?;
@@ -856,11 +850,7 @@ pub async fn login_openai(no_browser: bool) -> Result<OAuthTokens> {
     }
 
     let callback_listener = bind_callback_listener(port).ok();
-    let browser_opened = if crate::auth::browser_suppressed(no_browser) {
-        false
-    } else {
-        open::that(&auth_url).is_ok()
-    };
+    let browser_opened = crate::auth::open_browser_for_auth(&auth_url, no_browser);
 
     if browser_opened {
         if let Some(listener) = callback_listener {

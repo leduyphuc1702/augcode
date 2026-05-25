@@ -91,6 +91,10 @@ fn test_generated_default_config_uses_low_openai_reasoning_effort() {
         content.contains("openai_service_tier = \"priority\""),
         "generated default config should enable OpenAI fast mode"
     );
+    assert!(
+        content.contains("agent_workflow = true"),
+        "generated default config should enable agent workflow"
+    );
 
     if let Some(prev) = prev_home {
         crate::env::set_var("JCODE_HOME", prev);

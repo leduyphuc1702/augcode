@@ -1,13 +1,13 @@
 use super::*;
 
 impl MultiProvider {
-    pub(super) fn spawn_post_auth_model_refresh(
+    pub(super) fn invalidate_post_auth_provider_credentials(
         provider: Arc<dyn Provider>,
         provider_label: &'static str,
     ) {
         let Ok(handle) = tokio::runtime::Handle::try_current() else {
             crate::logging::auth_event(
-                "post_auth_model_refresh_skipped",
+                "post_auth_credentials_invalidation_skipped",
                 provider_label,
                 &[("reason", "no_tokio_runtime")],
             );
@@ -15,30 +15,12 @@ impl MultiProvider {
         };
 
         handle.spawn(async move {
-            crate::logging::auth_event("post_auth_model_refresh_started", provider_label, &[]);
             provider.invalidate_credentials().await;
-            match provider.prefetch_models().await {
-                Ok(()) => {
-                    crate::logging::auth_event(
-                        "post_auth_model_refresh_completed",
-                        provider_label,
-                        &[],
-                    );
-                    crate::bus::Bus::global().publish_models_updated();
-                }
-                Err(err) => {
-                    let reason = err.to_string();
-                    crate::logging::auth_event(
-                        "post_auth_model_refresh_failed",
-                        provider_label,
-                        &[("reason", reason.as_str())],
-                    );
-                    crate::logging::info(&format!(
-                        "Failed to refresh {} models after auth change: {}",
-                        provider_label, err
-                    ));
-                }
-            }
+            crate::logging::auth_event(
+                "post_auth_credentials_invalidated",
+                provider_label,
+                &[("model_catalog_refresh", "manual_only")],
+            );
         });
     }
 
@@ -323,8 +305,6 @@ impl MultiProvider {
             }
         }
 
-        result.spawn_anthropic_catalog_refresh_if_needed();
-        result.spawn_openai_catalog_refresh_if_needed();
         result.auto_select_active_multi_account();
         crate::logging::info(&format!(
             "[TIMING] provider_init: claude={}, anthropic={}, openai={}, copilot={}, antigravity={}, gemini={}, cursor={}, bedrock={}, openrouter={}, total={}ms",
@@ -376,47 +356,6 @@ impl MultiProvider {
             provider_init_start.elapsed().as_millis()
         ));
         result
-    }
-
-    pub(super) fn spawn_openai_catalog_refresh_if_needed(&self) {
-        if self.openai_provider().is_none() {
-            return;
-        }
-        if !begin_openai_model_catalog_refresh() {
-            return;
-        }
-
-        let creds = auth::codex::load_credentials();
-        let token = creds
-            .as_ref()
-            .ok()
-            .map(|c| c.access_token.clone())
-            .unwrap_or_default();
-        refresh_openai_model_catalog_in_background(token, "multi-provider");
-    }
-
-    pub(super) fn spawn_anthropic_catalog_refresh_if_needed(&self) {
-        let provider: Arc<dyn Provider> = if let Some(anthropic) = self.anthropic_provider() {
-            anthropic
-        } else if let Some(claude) = self.claude_provider() {
-            claude
-        } else {
-            return;
-        };
-
-        let Some(scope) = begin_anthropic_model_catalog_refresh() else {
-            return;
-        };
-
-        tokio::spawn(async move {
-            if let Err(err) = provider.prefetch_models().await {
-                crate::logging::info(&format!(
-                    "Failed to refresh Anthropic model catalog from provider bootstrap: {}",
-                    err
-                ));
-            }
-            finish_anthropic_model_catalog_refresh_for_scope(&scope);
-        });
     }
 
     /// Create a new MultiProvider, detecting available credentials

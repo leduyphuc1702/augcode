@@ -47,6 +47,23 @@ async fn receive_reload_signal(
     }
 }
 
+fn should_skip_process_exec_for_reload_test() -> bool {
+    #[cfg(test)]
+    {
+        return true;
+    }
+
+    #[cfg(not(test))]
+    {
+        std::env::var("JCODE_TEST_SESSION")
+            .map(|value| {
+                let trimmed = value.trim();
+                !trimmed.is_empty() && trimmed != "0" && !trimmed.eq_ignore_ascii_case("false")
+            })
+            .unwrap_or(false)
+    }
+}
+
 pub(super) async fn await_reload_signal(
     sessions: Arc<RwLock<HashMap<String, Arc<Mutex<Agent>>>>>,
     swarm_members: Arc<RwLock<HashMap<String, SwarmMember>>>,
@@ -76,16 +93,11 @@ pub(super) async fn await_reload_signal(
         );
         super::acknowledge_reload_signal(&signal);
 
-        if std::env::var("JCODE_TEST_SESSION")
-            .map(|value| {
-                let trimmed = value.trim();
-                !trimmed.is_empty() && trimmed != "0" && !trimmed.eq_ignore_ascii_case("false")
-            })
-            .unwrap_or(false)
-        {
+        if should_skip_process_exec_for_reload_test() {
             crate::logging::info(
-                "Server: JCODE_TEST_SESSION set, skipping process exec for reload test",
+                "Server: reload exec disabled for this test process; skipping process exec",
             );
+            let _ = super::reload_state::reload_signal().0.send(None);
             continue;
         }
 

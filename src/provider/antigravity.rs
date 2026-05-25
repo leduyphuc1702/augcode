@@ -815,16 +815,7 @@ impl Provider for AntigravityProvider {
             .collect()
     }
 
-    fn on_auth_changed(&self) {
-        let provider = self.clone();
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            handle.spawn(async move {
-                if provider.prefetch_models().await.is_ok() {
-                    crate::bus::Bus::global().publish_models_updated();
-                }
-            });
-        }
-    }
+    fn on_auth_changed(&self) {}
 
     async fn prefetch_models(&self) -> Result<()> {
         match self.fetch_available_models().await {

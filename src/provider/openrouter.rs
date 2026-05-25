@@ -16,10 +16,10 @@ use crate::message::{
 };
 use crate::provider_catalog::{
     OPENAI_COMPAT_PROFILE, is_safe_env_file_name, is_safe_env_key_name,
-    load_api_key_from_env_or_config, normalize_api_base, openai_compatible_profile_by_id,
-    openai_compatible_profile_id_for_api_base, openai_compatible_profile_static_context_limits,
-    openai_compatible_profile_static_models, openai_compatible_profiles,
-    resolve_openai_compatible_profile,
+    load_api_key_from_env_or_config, normalize_api_base, openai_compatible_custom_models,
+    openai_compatible_profile_by_id, openai_compatible_profile_id_for_api_base,
+    openai_compatible_profile_static_context_limits, openai_compatible_profile_static_models,
+    openai_compatible_profiles, resolve_openai_compatible_profile,
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -69,6 +69,7 @@ const DEFAULT_MODEL: &str = "anthropic/claude-sonnet-4";
 /// We keep the 24h disk cache for resilience/offline startup, but after this
 /// shorter interval we refresh in the background so new models appear quickly
 /// without blocking the picker UI.
+#[cfg(test)]
 const MODEL_CATALOG_SOFT_REFRESH_SECS: u64 = 15 * 60;
 /// Minimum delay between background refresh attempts.
 const MODEL_CATALOG_REFRESH_RETRY_SECS: u64 = 60;
@@ -577,10 +578,6 @@ fn parse_model_pricing(value: Option<&Value>) -> ModelPricing {
     }
 }
 
-fn models_fingerprint(models: &[ModelInfo]) -> String {
-    serde_json::to_string(models).unwrap_or_default()
-}
-
 fn endpoints_fingerprint(endpoints: &[EndpointInfo]) -> String {
     serde_json::to_string(endpoints).unwrap_or_default()
 }
@@ -838,7 +835,7 @@ impl OpenRouterProvider {
             .and_then(openai_compatible_profile_by_id)
             .map(openai_compatible_profile_static_context_limits)
             .unwrap_or_default();
-        let static_models = std::env::var("JCODE_OPENROUTER_STATIC_MODELS")
+        let mut static_models = std::env::var("JCODE_OPENROUTER_STATIC_MODELS")
             .ok()
             .map(|raw| {
                 raw.lines()
@@ -854,6 +851,13 @@ impl OpenRouterProvider {
                     .map(openai_compatible_profile_static_models)
                     .unwrap_or_default()
             });
+        if profile_id.as_deref() == Some(OPENAI_COMPAT_PROFILE.id) {
+            for model in openai_compatible_custom_models() {
+                if !static_models.iter().any(|existing| existing == &model) {
+                    static_models.push(model);
+                }
+            }
+        }
 
         if std::env::var_os("JCODE_OPENROUTER_CACHE_NAMESPACE").is_none()
             && let Some(profile) = autodetected_profile.as_ref()
@@ -902,42 +906,14 @@ impl OpenRouterProvider {
         })
     }
 
+    #[cfg(test)]
     fn should_background_refresh_model_catalog(&self, cache_age_secs: u64) -> bool {
-        if cache_age_secs < MODEL_CATALOG_SOFT_REFRESH_SECS {
-            return false;
-        }
-
-        let Some(now) = current_unix_secs() else {
-            return false;
-        };
-
-        let Ok(state) = self.model_catalog_refresh.lock() else {
-            return false;
-        };
-
-        if state.in_flight {
-            return false;
-        }
-
-        state
-            .last_attempt_unix
-            .map(|last| now.saturating_sub(last) >= MODEL_CATALOG_REFRESH_RETRY_SECS)
-            .unwrap_or(true)
+        let _ = cache_age_secs;
+        false
     }
 
     pub(crate) fn should_merge_static_models_with_live_catalog(&self) -> bool {
-        // Built-in OpenAI-compatible provider profiles use `static_models` as a
-        // startup/pre-catalog fallback so `/model` is useful immediately after
-        // login. Once a live `/models` catalog has been fetched, the live catalog
-        // is more authoritative for access control. Keeping built-in fallback
-        // entries after a successful fetch can advertise preview/stale models that
-        // the provider rejects at chat time, which is especially confusing for
-        // direct providers such as Cerebras.
-        //
-        // Preserve static models for OpenRouter itself and for custom/named
-        // profiles, where the user supplied the list explicitly and there may be
-        // no provider-side catalog contract.
-        self.supports_provider_features || self.profile_id.is_none()
+        true
     }
 
     pub(crate) fn filter_profile_chat_supported_models(&self, models: Vec<String>) -> Vec<String> {
@@ -982,6 +958,7 @@ impl OpenRouterProvider {
         load_disk_cache_entry().filter(|entry| self.model_disk_cache_source_matches(entry))
     }
 
+    #[cfg(test)]
     fn begin_background_model_catalog_refresh(&self) -> bool {
         let Some(now) = current_unix_secs() else {
             return false;
@@ -1006,6 +983,7 @@ impl OpenRouterProvider {
         true
     }
 
+    #[cfg(test)]
     fn finish_background_model_catalog_refresh(
         refresh_state: &Arc<Mutex<ModelCatalogRefreshState>>,
     ) {
@@ -1160,50 +1138,8 @@ impl OpenRouterProvider {
     }
 
     fn maybe_schedule_model_catalog_refresh(&self, cache_age_secs: u64, context: &'static str) {
-        if !self.should_background_refresh_model_catalog(cache_age_secs)
-            || !self.begin_background_model_catalog_refresh()
-        {
-            return;
-        }
-
-        let Ok(handle) = tokio::runtime::Handle::try_current() else {
-            Self::finish_background_model_catalog_refresh(&self.model_catalog_refresh);
-            return;
-        };
-
-        let client = self.client.clone();
-        let api_base = self.api_base.clone();
-        let auth = self.auth.clone();
-        let models_cache = Arc::clone(&self.models_cache);
-        let refresh_state = Arc::clone(&self.model_catalog_refresh);
-        let previous_fingerprint = self.cached_model_catalog_fingerprint();
-
-        handle.spawn(async move {
-            match fetch_models_from_api(client, api_base, auth, models_cache).await {
-                Ok(models) => {
-                    let updated = models_fingerprint(&models) != previous_fingerprint;
-                    if updated {
-                        crate::logging::info(&format!(
-                            "Refreshed OpenRouter model catalog in background ({}): {} models",
-                            context,
-                            models.len()
-                        ));
-                        crate::bus::Bus::global().publish_models_updated();
-                    } else {
-                        crate::logging::info(&format!(
-                            "OpenRouter model catalog refresh produced no material change ({}): {} models",
-                            context,
-                            models.len()
-                        ));
-                    }
-                }
-                Err(e) => crate::logging::info(&format!(
-                    "Failed to refresh OpenRouter model catalog in background ({}): {}",
-                    context, e
-                )),
-            }
-            OpenRouterProvider::finish_background_model_catalog_refresh(&refresh_state);
-        });
+        let _ = &self.model_catalog_refresh;
+        let _ = (cache_age_secs, context);
     }
 
     /// Parse provider routing configuration from environment variables
@@ -1470,18 +1406,6 @@ impl OpenRouterProvider {
         context: &'static str,
     ) -> bool {
         self.maybe_schedule_endpoint_refresh(model, cache_age_secs, context, false)
-    }
-
-    fn cached_model_catalog_fingerprint(&self) -> String {
-        if let Ok(cache) = self.models_cache.try_read()
-            && cache.fetched
-        {
-            return models_fingerprint(&cache.models);
-        }
-        if let Some(cache_entry) = self.load_usable_model_disk_cache_entry() {
-            return models_fingerprint(&cache_entry.models);
-        }
-        String::new()
     }
 
     pub(crate) fn cached_live_model_ids_for_display(&self) -> Option<HashSet<String>> {

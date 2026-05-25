@@ -84,7 +84,7 @@ fn format_auth_catalog_refresh_complete(
 ) -> String {
     let provider_label = provider_name.unwrap_or("provider");
     let mut message = format!(
-        "**Auth Model Catalog Updated**\n\n{} credentials are active. Catalog diff:\n\nModels: {} → {}  (+{} / -{})\nRoutes: {} → {}  (+{} / -{} / ~{})",
+        "**Auth Model List Updated**\n\n{} credentials are active. Configured model diff:\n\nModels: {} → {}  (+{} / -{})\nRoutes: {} → {}  (+{} / -{} / ~{})",
         provider_label,
         summary.model_count_before,
         summary.model_count_after,
@@ -107,16 +107,8 @@ fn format_auth_catalog_refresh_complete(
     if let Some(model) = provider_model {
         message.push_str(&format!("\n\nSelected model: `{}`.", model));
     }
-    message.push_str("\n\nUse `/model` if you want to choose a different accessible model.");
+    message.push_str("\n\nUse `/model` to choose a configured model or `/refresh-model-list` to fetch the live catalog manually.");
     message
-}
-
-fn auth_model_refresh_quiet_period() -> std::time::Duration {
-    if cfg!(test) {
-        std::time::Duration::from_millis(20)
-    } else {
-        std::time::Duration::from_millis(750)
-    }
 }
 
 async fn auth_refresh_targets(
@@ -553,8 +545,8 @@ pub(super) async fn handle_notify_auth_changed(
     crate::bus::Bus::global().publish(crate::bus::BusEvent::UiActivity(
         crate::bus::UiActivity::auth(
             Some(session_id.clone()),
-            "**Auth Change Received**\n\nThe server is reloading provider credentials and refreshing model route availability for this session.",
-            Some("Auth: refreshing providers..."),
+            "**Auth Change Received**\n\nThe server is reloading provider credentials. Model routes use configured models unless you run `/refresh-model-list` manually.",
+            Some("Auth: reloading providers..."),
         ),
     ));
     let targets = auth_refresh_targets(provider_template, provider, sessions).await;
@@ -563,7 +555,6 @@ pub(super) async fn handle_notify_auth_changed(
     let before_snapshot = available_models_snapshot(agent).await;
     tokio::spawn(async move {
         let activation = crate::auth::lifecycle::activate_auth_change(&activation_request);
-        let mut bus_rx = crate::bus::Bus::global().subscribe();
         for provider in targets.providers {
             provider.on_auth_changed();
         }
@@ -590,43 +581,16 @@ pub(super) async fn handle_notify_auth_changed(
         crate::bus::Bus::global().publish(crate::bus::BusEvent::UiActivity(
             crate::bus::UiActivity::catalog(
                 Some(session_id.clone()),
-                "**Auth Model Routes Updating**\n\nCredentials are reloaded. Jcode is pushing an updated model catalog snapshot to connected clients.",
-                Some("Auth: model routes updating..."),
+                "**Auth Model Routes Updated**\n\nCredentials are reloaded. Jcode is pushing the configured model snapshot to connected clients.",
+                Some("Auth: model routes updated"),
             ),
         ));
 
         spawn_deferred_auth_refreshes(targets.deferred_agents);
 
-        // Hot-initializing providers is synchronous, while dynamic catalogs may
-        // continue refreshing in the background. Push an immediate snapshot so
-        // the model picker/header stop looking stale right after login, then
-        // push another snapshot when the background refresh announces itself.
         let mut latest_snapshot = available_models_snapshot(&agent_clone).await;
         let _ = client_event_tx_clone.send(latest_snapshot.clone().into_event());
-
-        let max_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
-        let quiet_period = auth_model_refresh_quiet_period();
-        let mut quiet_deadline: Option<tokio::time::Instant> = None;
-        loop {
-            let now = tokio::time::Instant::now();
-            let deadline = quiet_deadline
-                .map(|quiet| std::cmp::min(max_deadline, quiet))
-                .unwrap_or(max_deadline);
-            let remaining = deadline.saturating_duration_since(now);
-            if remaining.is_zero() {
-                break;
-            }
-            tokio::select! {
-                event = bus_rx.recv() => {
-                    if matches!(event, Ok(crate::bus::BusEvent::ModelsUpdated)) {
-                        latest_snapshot = available_models_snapshot(&agent_clone).await;
-                        let _ = client_event_tx_clone.send(latest_snapshot.clone().into_event());
-                        quiet_deadline = Some(tokio::time::Instant::now() + quiet_period);
-                    }
-                }
-                _ = tokio::time::sleep(remaining) => break,
-            }
-        }
+        tokio::task::yield_now().await;
 
         let manual_model_selected_during_auth_refresh = {
             let agent_guard = agent_clone.lock().await;
@@ -679,7 +643,7 @@ pub(super) async fn handle_notify_auth_changed(
             crate::bus::UiActivity::catalog(
                 Some(session_id),
                 catalog_message,
-                Some("Auth: model catalog updated"),
+                Some("Auth: model list updated"),
             ),
         ));
     });

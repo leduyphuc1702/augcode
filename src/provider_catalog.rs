@@ -2,6 +2,7 @@ pub use jcode_provider_metadata::*;
 use std::collections::{HashMap, HashSet};
 
 pub const OPENAI_COMPAT_LOCAL_ENABLED_ENV: &str = "JCODE_OPENAI_COMPAT_LOCAL_ENABLED";
+pub const OPENAI_COMPAT_MODELS_ENV: &str = "JCODE_OPENAI_COMPAT_MODELS";
 
 pub(crate) fn api_base_uses_localhost(raw: &str) -> bool {
     let Ok(parsed) = url::Url::parse(raw) else {
@@ -81,6 +82,43 @@ pub fn resolve_openai_compatible_profile(
     }
 
     resolved
+}
+
+pub fn parse_openai_compatible_models(raw: &str) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut models = Vec::new();
+    for model in raw.split(|ch| matches!(ch, ',' | '\n' | '\r')) {
+        let model = model.trim();
+        if !model.is_empty() && seen.insert(model.to_string()) {
+            models.push(model.to_string());
+        }
+    }
+    models
+}
+
+pub fn openai_compatible_custom_models() -> Vec<String> {
+    env_override(OPENAI_COMPAT_MODELS_ENV)
+        .map(|raw| parse_openai_compatible_models(&raw))
+        .unwrap_or_default()
+}
+
+pub fn save_openai_compatible_custom_models(models: &[String]) -> anyhow::Result<Vec<String>> {
+    let mut seen = HashSet::new();
+    let mut deduped = Vec::new();
+    for model in models {
+        let model = model.trim();
+        if !model.is_empty() && seen.insert(model.to_string()) {
+            deduped.push(model.to_string());
+        }
+    }
+    let joined = deduped.join(",");
+    let value = (!joined.is_empty()).then_some(joined.as_str());
+    save_env_value_to_env_file(
+        OPENAI_COMPAT_MODELS_ENV,
+        OPENAI_COMPAT_PROFILE.env_file,
+        value,
+    )?;
+    Ok(deduped)
 }
 
 pub fn resolve_openai_compatible_profile_selection(input: &str) -> Option<OpenAiCompatibleProfile> {
@@ -364,6 +402,12 @@ pub fn openai_compatible_profile_static_models(profile: OpenAiCompatibleProfile)
             push("MiniMax-M2.5");
         }
         _ => {}
+    }
+
+    if profile.id == OPENAI_COMPAT_PROFILE.id {
+        for model in openai_compatible_custom_models() {
+            push(&model);
+        }
     }
 
     models
@@ -762,6 +806,10 @@ pub fn load_api_key_from_env_or_config(env_key: &str, file_name: &str) -> Option
         }
     }
 
+    if test_should_skip_unsandboxed_config_reads() {
+        return None;
+    }
+
     let config_path = crate::storage::app_config_dir().ok()?.join(file_name);
     crate::storage::harden_secret_file_permissions(&config_path);
     let content = std::fs::read_to_string(config_path).ok()?;
@@ -795,7 +843,9 @@ pub fn load_api_key_from_env_or_config(env_key: &str, file_name: &str) -> Option
         }
     }
 
-    if let Some(key) = crate::auth::external::load_api_key_for_env(env_key) {
+    if !test_should_skip_external_auth_reads()
+        && let Some(key) = crate::auth::external::load_api_key_for_env(env_key)
+    {
         return Some(key);
     }
 
@@ -825,6 +875,10 @@ pub fn load_env_value_from_env_or_config(env_key: &str, file_name: &str) -> Opti
         }
     }
 
+    if test_should_skip_unsandboxed_config_reads() {
+        return None;
+    }
+
     let config_path = crate::storage::app_config_dir().ok()?.join(file_name);
     crate::storage::harden_secret_file_permissions(&config_path);
     let content = std::fs::read_to_string(config_path).ok()?;
@@ -840,6 +894,30 @@ pub fn load_env_value_from_env_or_config(env_key: &str, file_name: &str) -> Opti
     }
 
     None
+}
+
+fn test_should_skip_unsandboxed_config_reads() -> bool {
+    #[cfg(test)]
+    {
+        std::env::var_os("JCODE_HOME").is_none()
+            && std::env::var_os("XDG_CONFIG_HOME").is_none()
+            && std::env::var_os("APPDATA").is_none()
+    }
+    #[cfg(not(test))]
+    {
+        false
+    }
+}
+
+fn test_should_skip_external_auth_reads() -> bool {
+    #[cfg(test)]
+    {
+        std::env::var_os("JCODE_HOME").is_none()
+    }
+    #[cfg(not(test))]
+    {
+        false
+    }
 }
 
 pub fn save_env_value_to_env_file(

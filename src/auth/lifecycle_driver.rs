@@ -298,8 +298,8 @@ impl AuthLifecycleResult {
         let markers = [
             saved_or_detected.as_str(),
             "**Auth Change Received**",
-            "**Auth Model Routes Updating**",
-            "**Auth Model Catalog Updated**",
+            "**Auth Model Routes Updated**",
+            "**Auth Model List Updated**",
         ];
         let mut previous = None;
         for marker in markers {
@@ -481,27 +481,27 @@ impl AuthLifecycleDriver {
                 resolved.default_model.as_deref().unwrap_or("none")
             ));
             transcript.push(format!(
-                "**{} API key saved.**\n\nStored at `{}`.\nFetching models now. Jcode will switch to an accessible model returned by the live catalog and show the catalog diff when discovery finishes.",
+                "**{} API key saved.**\n\nStored at `{}`.\nModel list uses configured models only. Run `/refresh-model-list` to fetch the live catalog manually.",
                 spec.provider_label,
                 self.sandbox.env_file_path(&resolved.env_file).display()
             ));
         } else {
             transcript.push(format!(
-                "**{} credentials detected.**\n\nCredential source: {:?}. Fetching models now.",
+                "**{} credentials detected.**\n\nCredential source: {:?}. Model list uses configured models only.",
                 spec.provider_label,
                 spec.auth_path.credential_source()
             ));
         }
         transcript.push(
-            "**Auth Change Received**\n\nThe server is reloading provider credentials and refreshing model route availability for this session."
+            "**Auth Change Received**\n\nThe server is reloading provider credentials. Model routes use configured models unless you run `/refresh-model-list` manually."
                 .to_string(),
         );
         transcript.push(
-            "**Auth Model Routes Updating**\n\nCredentials are reloaded. Jcode is pushing an updated model catalog snapshot to connected clients."
+            "**Auth Model Routes Updated**\n\nCredentials are reloaded. Jcode is pushing the configured model snapshot to connected clients."
                 .to_string(),
         );
         let mut updated = format!(
-            "**Auth Model Catalog Updated**\n\n{} credentials are active. Catalog diff:\n\nModels: fixture-before → fixture-after\nRoutes: fixture-before → fixture-after\n\nSelected model: `{}`.",
+            "**Auth Model List Updated**\n\n{} credentials are active. Configured model diff:\n\nModels: fixture-before → fixture-after\nRoutes: fixture-before → fixture-after\n\nSelected model: `{}`.",
             spec.provider_label,
             selected_model.unwrap_or("none")
         );
@@ -1100,14 +1100,14 @@ mod tests {
         network_failure.transcript = vec![
             format!("**{} API key saved.**", spec.provider_label),
             "**Auth Change Received**\n\nThe server is reloading provider credentials.".to_string(),
-            "**Model Discovery Still Updating**\n\nCould not fetch the live catalog yet; waiting for server refresh."
+            "**Auth Model List Updated**\n\nNo configured model route is available yet."
                 .to_string(),
         ];
         assert_rejected_success(
             &spec,
             network_failure,
             "network catalog failure pending state",
-            "Model Discovery Still Updating",
+            "No configured model route",
         );
 
         let mut empty_catalog = success.clone();
@@ -1490,7 +1490,7 @@ mod tests {
         let mut duplicated = result.clone();
         duplicated
             .transcript
-            .push("**Auth Model Catalog Updated**\n\nDuplicate final success.".to_string());
+            .push("**Auth Model List Updated**\n\nDuplicate final success.".to_string());
         let duplicate_panic = std::panic::catch_unwind(|| duplicated.assert_success(&spec))
             .expect_err("duplicate final catalog update must not satisfy happy auth lifecycle");
         let duplicate_message = duplicate_panic

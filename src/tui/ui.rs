@@ -973,6 +973,7 @@ pub struct LayoutSnapshot {
     pub messages_area: Rect,
     pub diagram_area: Option<Rect>,
     pub diff_pane_area: Option<Rect>,
+    pub inline_ui_area: Option<Rect>,
     pub input_area: Option<Rect>,
 }
 
@@ -984,10 +985,27 @@ fn last_layout_state() -> &'static Mutex<Option<LayoutSnapshot>> {
     LAST_LAYOUT.get_or_init(|| Mutex::new(None))
 }
 
+#[cfg(test)]
 pub fn record_layout_snapshot(
     messages_area: Rect,
     diagram_area: Option<Rect>,
     diff_pane_area: Option<Rect>,
+    input_area: Option<Rect>,
+) {
+    record_layout_snapshot_with_inline(
+        messages_area,
+        diagram_area,
+        diff_pane_area,
+        None,
+        input_area,
+    );
+}
+
+pub fn record_layout_snapshot_with_inline(
+    messages_area: Rect,
+    diagram_area: Option<Rect>,
+    diff_pane_area: Option<Rect>,
+    inline_ui_area: Option<Rect>,
     input_area: Option<Rect>,
 ) {
     #[cfg(test)]
@@ -997,6 +1015,7 @@ pub fn record_layout_snapshot(
                 messages_area,
                 diagram_area,
                 diff_pane_area,
+                inline_ui_area,
                 input_area,
             });
         });
@@ -1009,6 +1028,7 @@ pub fn record_layout_snapshot(
                 messages_area,
                 diagram_area,
                 diff_pane_area,
+                inline_ui_area,
                 input_area,
             });
         }
@@ -2025,7 +2045,13 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
         capture.layout.messages_area = Some(messages_area.into());
         capture.layout.diagram_area = diagram_area.map(|r| r.into());
     }
-    record_layout_snapshot(messages_area, diagram_area, diff_pane_area, Some(chunks[6]));
+    record_layout_snapshot_with_inline(
+        messages_area,
+        diagram_area,
+        diff_pane_area,
+        (inline_block_height > 0).then_some(chunks[4]),
+        Some(chunks[6]),
+    );
 
     let margins = draw_messages(
         frame,

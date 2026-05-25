@@ -72,6 +72,20 @@ fn route_provider_display(provider: &str, api_method: &str) -> String {
 }
 
 fn picker_entry_display_name(entry: &crate::tui::PickerEntry) -> String {
+    if let crate::tui::PickerAction::Workflow(
+        crate::tui::WorkflowPickerAction::SelectQuestionOption { multiple, .. },
+    ) = &entry.action
+    {
+        let marker = if *multiple {
+            if entry.is_current { "[x]" } else { "[ ]" }
+        } else if entry.is_current {
+            "(*)"
+        } else {
+            "( )"
+        };
+        return format!("{marker} {}", entry.name);
+    }
+
     let default_marker = if entry.is_default { " ⚙" } else { "" };
     let is_new = entry
         .options
@@ -200,7 +214,7 @@ fn account_picker_entry_title(
     (format!("{}{}", provider_prefix, display_name), prefix_chars)
 }
 
-fn account_inline_interactive_state_label(entry: &crate::tui::PickerEntry) -> &'static str {
+fn account_inline_interactive_state_label(entry: &crate::tui::PickerEntry) -> &str {
     entry.account_state_label().unwrap_or("—")
 }
 
@@ -581,18 +595,29 @@ pub(super) fn draw_inline_interactive(frame: &mut Frame, app: &dyn TuiState, are
             },
         ));
         let display_name = picker_entry_display_name(entry);
-        let account_action_color = match &entry.action {
-            crate::tui::PickerAction::Account(crate::tui::AccountPickerAction::Add { .. }) => {
-                Some(rgb(140, 220, 170))
-            }
-            crate::tui::PickerAction::Account(crate::tui::AccountPickerAction::Replace {
-                ..
-            }) => Some(rgb(240, 200, 120)),
-            crate::tui::PickerAction::Account(crate::tui::AccountPickerAction::OpenCenter {
-                ..
-            }) => Some(rgb(150, 190, 255)),
-            _ => None,
-        };
+        let account_action_color =
+            match &entry.action {
+                crate::tui::PickerAction::Account(crate::tui::AccountPickerAction::Add {
+                    ..
+                }) => Some(rgb(140, 220, 170)),
+                crate::tui::PickerAction::Account(crate::tui::AccountPickerAction::Replace {
+                    ..
+                }) => Some(rgb(240, 200, 120)),
+                crate::tui::PickerAction::Account(
+                    crate::tui::AccountPickerAction::PromptValue { state_label, .. },
+                ) if state_label == "add" => Some(rgb(140, 220, 170)),
+                crate::tui::PickerAction::Account(
+                    crate::tui::AccountPickerAction::SubmitInput { state_label, .. },
+                ) if state_label == "remove" => Some(rgb(230, 140, 140)),
+                crate::tui::PickerAction::Account(
+                    crate::tui::AccountPickerAction::PromptValue { .. }
+                    | crate::tui::AccountPickerAction::SubmitInput { .. },
+                ) => Some(rgb(240, 200, 120)),
+                crate::tui::PickerAction::Account(
+                    crate::tui::AccountPickerAction::OpenCenter { .. },
+                ) => Some(rgb(150, 190, 255)),
+                _ => None,
+            };
         let primary_style = if unavailable {
             Style::default().fg(rgb(80, 80, 80))
         } else if is_row_selected && col == 0 {

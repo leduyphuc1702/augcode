@@ -1272,6 +1272,12 @@ impl App {
                     output.clone(),
                 );
 
+                if tc.name == "agent_workflow"
+                    && let Ok(saved_session) = crate::session::Session::load(&self.session.id)
+                {
+                    self.session.agent_workflow_state = saved_session.agent_workflow_state;
+                }
+
                 self.add_provider_message(Message::tool_result_with_duration(
                     &tc.id,
                     &output,
@@ -1289,6 +1295,9 @@ impl App {
                 );
                 self.observe_tool_result(&tc, &output, is_error, tool_title.as_deref());
                 let _ = self.session.save();
+                if tc.name == "agent_workflow" {
+                    self.maybe_open_workflow_interaction_picker();
+                }
             }
 
             if !generated_image_contexts.is_empty() {

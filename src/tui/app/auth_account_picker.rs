@@ -257,6 +257,30 @@ impl App {
                             status_notice: "Account: editing default model hint...".to_string(),
                         },
                     ));
+                    items.push(AccountPickerItem::action(
+                        provider.id,
+                        provider.display_name,
+                        "Add model",
+                        "Append a configured model id",
+                        AccountPickerCommand::PromptValue {
+                            prompt: "Enter an OpenAI-compatible model id to add.".to_string(),
+                            command_prefix: "/account openai-compatible model add".to_string(),
+                            empty_value: None,
+                            status_notice: "Account: adding OpenAI-compatible model...".to_string(),
+                        },
+                    ));
+                    for model in crate::provider_catalog::openai_compatible_custom_models() {
+                        items.push(AccountPickerItem::action(
+                            provider.id,
+                            provider.display_name,
+                            format!("Remove model `{}`", model),
+                            "Configured model",
+                            AccountPickerCommand::SubmitInput(format!(
+                                "/account openai-compatible model remove {}",
+                                model
+                            )),
+                        ));
+                    }
                 }
                 "copilot" => {
                     items.push(AccountPickerItem::action(
@@ -388,12 +412,12 @@ impl App {
         let Some(scope_key) = self.inline_account_picker_scope_key(provider_filter) else {
             if let Some(provider_id) = provider_filter {
                 self.push_display_message(DisplayMessage::system(format!(
-                    "Inline `/account` picker is only available for Claude and OpenAI accounts. Use `/account {} settings` for provider details.",
+                    "Inline `/account` picker is only available for Claude, OpenAI, and OpenAI-compatible accounts. Use `/account {} settings` for provider details.",
                     provider_id
                 )));
             } else {
                 self.push_display_message(DisplayMessage::system(
-                    "Inline `/account` picker is available for Claude and OpenAI accounts. Use `/account claude` or `/account openai` to choose explicitly.".to_string(),
+                    "Inline `/account` picker is available for Claude, OpenAI, and OpenAI-compatible accounts. Use `/account claude`, `/account openai`, or `/account openai-compatible` to choose explicitly.".to_string(),
                 ));
             }
             self.set_status_notice("Account picker unavailable");
@@ -404,6 +428,7 @@ impl App {
             "all" => "Claude + OpenAI",
             "claude" => "Claude",
             "openai" => "OpenAI",
+            "openai-compatible" => "OpenAI-compatible",
             _ => scope_key.as_str(),
         };
 
@@ -411,6 +436,7 @@ impl App {
             "all" => self.build_all_inline_account_picker(),
             "claude" => self.build_claude_inline_account_picker(),
             "openai" => self.build_openai_inline_account_picker(),
+            "openai-compatible" => self.build_openai_compatible_inline_account_picker(),
             _ => unreachable!(),
         };
 
@@ -447,6 +473,7 @@ impl App {
             return match filter.to_ascii_lowercase().as_str() {
                 "claude" | "anthropic" => Some("claude".to_string()),
                 "openai" => Some("openai".to_string()),
+                "openai-compatible" => Some("openai-compatible".to_string()),
                 _ => None,
             };
         }
@@ -464,6 +491,7 @@ impl App {
         {
             "claude" => Some("claude".to_string()),
             "openai" => Some("openai".to_string()),
+            "openai-compatible" => Some("openai-compatible".to_string()),
             _ => None,
         }
     }
@@ -1009,6 +1037,181 @@ impl App {
             selected = 0;
         }
         (models, selected)
+    }
+
+    fn build_openai_compatible_inline_account_picker(
+        &self,
+    ) -> (Vec<crate::tui::PickerEntry>, usize) {
+        let compat = crate::provider_catalog::resolve_openai_compatible_profile(
+            crate::provider_catalog::OPENAI_COMPAT_PROFILE,
+        );
+        let configured_models = crate::provider_catalog::openai_compatible_custom_models();
+
+        let mut models = Vec::with_capacity(configured_models.len() + 6);
+        models.push(Self::openai_compatible_inline_prompt_entry(
+            "Step 1: API base URL",
+            "settings",
+            compat.api_base.clone(),
+            "Step 1/2: enter the OpenAI-compatible API base URL, for example https://llm.example.com/v1.",
+            "/account openai-compatible api-base",
+            Some("clear"),
+            "Account: editing OpenAI-compatible API base URL (step 1/2)...",
+            "edit",
+        ));
+        models.push(Self::openai_compatible_inline_prompt_entry(
+            "Step 2: API key variable",
+            "settings",
+            compat.api_key_env.clone(),
+            "Step 2/2: enter the env var name that stores the API key, for example OPENAI_API_KEY.",
+            "/account openai-compatible api-key-name",
+            Some("clear"),
+            "Account: editing OpenAI-compatible API key variable (step 2/2)...",
+            "edit",
+        ));
+        models.push(Self::openai_compatible_inline_prompt_entry(
+            "Env file",
+            "settings",
+            compat.env_file.clone(),
+            "Enter the env file name for this profile.",
+            "/account openai-compatible env-file",
+            Some("clear"),
+            "Account: editing env file...",
+            "edit",
+        ));
+        models.push(Self::openai_compatible_inline_prompt_entry(
+            "Default model hint",
+            "settings",
+            compat
+                .default_model
+                .as_deref()
+                .unwrap_or("(unset)")
+                .to_string(),
+            "Enter the default model hint for this profile.",
+            "/account openai-compatible default-model",
+            Some("clear"),
+            "Account: editing default model hint...",
+            "edit",
+        ));
+        models.push(Self::openai_compatible_inline_prompt_entry(
+            "Add model",
+            "model",
+            "Append a configured model id",
+            "Enter an OpenAI-compatible model id to add.",
+            "/account openai-compatible model add",
+            None,
+            "Account: adding OpenAI-compatible model...",
+            "add",
+        ));
+
+        for model in configured_models {
+            models.push(Self::openai_compatible_inline_submit_entry(
+                format!("Remove model `{}`", model),
+                "remove",
+                "Configured model",
+                format!("/account openai-compatible model remove {}", model),
+                "remove",
+            ));
+        }
+
+        models.push(crate::tui::PickerEntry {
+            name: "account center".to_string(),
+            options: vec![crate::tui::PickerOption {
+                provider: "OpenAI-compatible".to_string(),
+                api_method: "manage".to_string(),
+                available: true,
+                detail: "full OpenAI-compatible settings".to_string(),
+                estimated_reference_cost_micros: None,
+            }],
+            action: crate::tui::PickerAction::Account(
+                crate::tui::AccountPickerAction::OpenCenter {
+                    provider_filter: Some("openai-compatible".to_string()),
+                },
+            ),
+            selected_option: 0,
+            is_current: false,
+            is_default: false,
+            recommended: false,
+            recommendation_rank: usize::MAX,
+            old: false,
+            created_date: None,
+            effort: None,
+        });
+
+        (models, 0)
+    }
+
+    fn openai_compatible_inline_prompt_entry(
+        name: impl Into<String>,
+        api_method: impl Into<String>,
+        detail: impl Into<String>,
+        prompt: impl Into<String>,
+        command_prefix: impl Into<String>,
+        empty_value: Option<&str>,
+        status_notice: impl Into<String>,
+        state_label: &str,
+    ) -> crate::tui::PickerEntry {
+        crate::tui::PickerEntry {
+            name: name.into(),
+            options: vec![crate::tui::PickerOption {
+                provider: "OpenAI-compatible".to_string(),
+                api_method: api_method.into(),
+                available: true,
+                detail: detail.into(),
+                estimated_reference_cost_micros: None,
+            }],
+            action: crate::tui::PickerAction::Account(
+                crate::tui::AccountPickerAction::PromptValue {
+                    provider_id: "openai-compatible".to_string(),
+                    prompt: prompt.into(),
+                    command_prefix: command_prefix.into(),
+                    empty_value: empty_value.map(|value| value.to_string()),
+                    status_notice: status_notice.into(),
+                    state_label: state_label.to_string(),
+                },
+            ),
+            selected_option: 0,
+            is_current: false,
+            is_default: false,
+            recommended: false,
+            recommendation_rank: usize::MAX,
+            old: false,
+            created_date: None,
+            effort: None,
+        }
+    }
+
+    fn openai_compatible_inline_submit_entry(
+        name: impl Into<String>,
+        api_method: impl Into<String>,
+        detail: impl Into<String>,
+        input: impl Into<String>,
+        state_label: &str,
+    ) -> crate::tui::PickerEntry {
+        crate::tui::PickerEntry {
+            name: name.into(),
+            options: vec![crate::tui::PickerOption {
+                provider: "OpenAI-compatible".to_string(),
+                api_method: api_method.into(),
+                available: true,
+                detail: detail.into(),
+                estimated_reference_cost_micros: None,
+            }],
+            action: crate::tui::PickerAction::Account(
+                crate::tui::AccountPickerAction::SubmitInput {
+                    provider_id: "openai-compatible".to_string(),
+                    input: input.into(),
+                    state_label: state_label.to_string(),
+                },
+            ),
+            selected_option: 0,
+            is_current: false,
+            is_default: false,
+            recommended: false,
+            recommendation_rank: usize::MAX,
+            old: false,
+            created_date: None,
+            effort: None,
+        }
     }
 
     pub(crate) fn handle_account_picker_command(

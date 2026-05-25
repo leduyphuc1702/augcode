@@ -63,17 +63,30 @@ enum AuthProbeMode {
 }
 
 pub fn browser_suppressed(cli_no_browser: bool) -> bool {
-    cli_no_browser || env_truthy("NO_BROWSER") || env_truthy("JCODE_NO_BROWSER")
+    cli_no_browser
+        || crate::util::system_open_suppressed_for_tests()
+        || crate::util::env_truthy("NO_BROWSER")
+        || crate::util::env_truthy("JCODE_NO_BROWSER")
 }
 
 fn env_truthy(key: &str) -> bool {
-    std::env::var(key)
-        .ok()
-        .map(|value| {
-            let trimmed = value.trim();
-            !trimmed.is_empty() && trimmed != "0" && !trimmed.eq_ignore_ascii_case("false")
-        })
-        .unwrap_or(false)
+    crate::util::env_truthy(key)
+}
+
+pub fn open_browser_for_auth(target: &str, cli_no_browser: bool) -> bool {
+    if browser_suppressed(cli_no_browser) {
+        false
+    } else {
+        open::that(target).is_ok()
+    }
+}
+
+pub fn open_browser_for_auth_detached(target: &str, cli_no_browser: bool) -> bool {
+    if browser_suppressed(cli_no_browser) {
+        false
+    } else {
+        open::that_detached(target).is_ok()
+    }
 }
 
 fn auth_timing_logging_enabled() -> bool {
