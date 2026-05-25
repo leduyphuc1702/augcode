@@ -703,10 +703,9 @@ pub(crate) async fn run_live_openai_compatible_stream_smoke(
             .get("choices")
             .and_then(|choices| choices.get(0))
             .and_then(|choice| choice.get("delta"))
+            && let Some(part) = delta.get("content").and_then(|content| content.as_str())
         {
-            if let Some(part) = delta.get("content").and_then(|content| content.as_str()) {
-                content.push_str(part);
-            }
+            content.push_str(part);
         }
         if let Some(reason) = parsed
             .get("choices")

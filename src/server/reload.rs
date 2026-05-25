@@ -50,7 +50,7 @@ async fn receive_reload_signal(
 fn should_skip_process_exec_for_reload_test() -> bool {
     #[cfg(test)]
     {
-        return true;
+        true
     }
 
     #[cfg(not(test))]

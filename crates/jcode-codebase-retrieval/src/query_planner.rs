@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum QueryIntent {
     Understand,
@@ -9,16 +9,11 @@ pub enum QueryIntent {
     Test,
     Refactor,
     Review,
+    #[default]
     General,
 }
 
-impl Default for QueryIntent {
-    fn default() -> Self {
-        QueryIntent::General
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourceWeights {
     pub unsaved_buffer: i32,
     pub overlay: i32,
@@ -26,19 +21,6 @@ pub struct SourceWeights {
     pub vector: i32,
     pub manifest: i32,
     pub graph_neighbor: i32,
-}
-
-impl Default for SourceWeights {
-    fn default() -> Self {
-        Self {
-            unsaved_buffer: 0,
-            overlay: 0,
-            symbol: 0,
-            vector: 0,
-            manifest: 0,
-            graph_neighbor: 0,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

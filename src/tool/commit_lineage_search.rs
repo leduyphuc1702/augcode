@@ -18,6 +18,7 @@ impl CommitLineageSearchTool {
 struct CommitLineageSearchInput {
     query: String,
     #[serde(default)]
+    #[serde(rename = "branch")]
     branch: Option<String>,
     #[serde(default)]
     max_results: Option<usize>,
@@ -60,6 +61,7 @@ impl Tool for CommitLineageSearchTool {
         let params: CommitLineageSearchInput = serde_json::from_value(input)?;
         let root = root_from_context_path(ctx.working_dir)?;
         let max_results = params.max_results.unwrap_or(10);
+        let _branch = params.branch.as_deref();
         let docs = harvest_commit_lineage(&root, max_results)?;
 
         let query_lower = params.query.to_lowercase();

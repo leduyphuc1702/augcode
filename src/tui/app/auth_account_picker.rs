@@ -1140,6 +1140,7 @@ impl App {
         (models, 0)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn openai_compatible_inline_prompt_entry(
         name: impl Into<String>,
         api_method: impl Into<String>,

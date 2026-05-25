@@ -508,6 +508,8 @@ fn normalize_skill_name(name: Option<String>, action: &str) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::await_holding_lock)]
+
     use super::*;
 
     struct EnvVarGuard {

@@ -130,7 +130,7 @@ async fn run_final_extraction(
         transcript.len()
     ));
 
-    let sidecar = sidecar.unwrap_or_else(crate::sidecar::Sidecar::new);
+    let sidecar = sidecar.unwrap_or_default();
     let manager = manager_for_working_dir(working_dir.as_deref());
 
     let existing: Vec<String> = manager
@@ -247,6 +247,7 @@ impl MemoryAgentHandle {
 }
 
 /// Messages sent to the memory agent
+#[allow(clippy::large_enum_variant)]
 enum AgentMessage {
     Context {
         session_id: String,

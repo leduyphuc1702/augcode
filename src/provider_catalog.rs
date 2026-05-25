@@ -87,7 +87,7 @@ pub fn resolve_openai_compatible_profile(
 pub fn parse_openai_compatible_models(raw: &str) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut models = Vec::new();
-    for model in raw.split(|ch| matches!(ch, ',' | '\n' | '\r')) {
+    for model in raw.split([',', '\n', '\r']) {
         let model = model.trim();
         if !model.is_empty() && seen.insert(model.to_string()) {
             models.push(model.to_string());

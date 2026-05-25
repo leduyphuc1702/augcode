@@ -132,7 +132,7 @@ pub fn detected_resume_terminal() -> Option<String> {
         let term_program = std::env::var("TERM_PROGRAM")
             .ok()
             .map(|value| value.to_ascii_lowercase());
-        return match term_program.as_deref() {
+        match term_program.as_deref() {
             Some("ghostty") => Some("ghostty".to_string()),
             Some("kitty") => Some("kitty".to_string()),
             Some("wezterm") => Some("wezterm".to_string()),
@@ -140,7 +140,7 @@ pub fn detected_resume_terminal() -> Option<String> {
             Some("iterm.app") | Some("iterm2") => Some("iterm2".to_string()),
             Some("apple_terminal") | Some("terminal") => Some("terminal".to_string()),
             _ => None,
-        };
+        }
     }
 
     #[cfg(not(target_os = "macos"))]

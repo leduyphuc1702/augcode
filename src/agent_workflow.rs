@@ -25,9 +25,10 @@ pub const STATUS_REJECTED: &str = "rejected";
 
 const ARTIFACT_MAX_CHARS: usize = 16_000;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkflowPhase {
+    #[default]
     Intake,
     SpecDraft,
     PlanDraft,
@@ -39,12 +40,6 @@ pub enum WorkflowPhase {
     AwaitReviewApproval,
     Done,
     Rework,
-}
-
-impl Default for WorkflowPhase {
-    fn default() -> Self {
-        Self::Intake
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -95,32 +90,22 @@ pub struct WorkflowDecision {
     pub comments: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkflowInteractionKind {
     PlanApproval,
     ReviewApproval,
+    #[default]
     Question,
     SkillApproval,
 }
 
-impl Default for WorkflowInteractionKind {
-    fn default() -> Self {
-        Self::Question
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkflowSelectionMode {
+    #[default]
     Single,
     Multiple,
-}
-
-impl Default for WorkflowSelectionMode {
-    fn default() -> Self {
-        Self::Single
-    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -224,22 +209,12 @@ impl Default for AgentWorkflowTaskState {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct RemoteSkillGrant {
     pub skill_ref: String,
     pub target_agent_role: Option<String>,
     pub workflow_task_id: Option<String>,
-}
-
-impl Default for RemoteSkillGrant {
-    fn default() -> Self {
-        Self {
-            skill_ref: String::new(),
-            target_agent_role: None,
-            workflow_task_id: None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

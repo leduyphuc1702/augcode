@@ -107,10 +107,10 @@ fn is_ghostty_installed() -> bool {
         return true;
     }
 
-    if let Some(home) = dirs::home_dir() {
-        if home.join("Applications/Ghostty.app").exists() {
-            return true;
-        }
+    if let Some(home) = dirs::home_dir()
+        && home.join("Applications/Ghostty.app").exists()
+    {
+        return true;
     }
 
     std::process::Command::new("which")
@@ -380,7 +380,7 @@ pub fn run_setup_hotkey(_listen_macos_hotkey: bool) -> Result<()> {
                     "  Press \x1b[1mAlt+;\x1b[0m from anywhere to open jcode in {}.",
                     installed_terminal.label()
                 );
-                return Ok(());
+                Ok(())
             }
             Err(e) => {
                 eprintln!("  \x1b[31m✗\x1b[0m Failed: {}", e);
@@ -422,10 +422,11 @@ fn run_macos_hotkey_listener() -> Result<()> {
         .context("failed to register Alt+; hotkey")?;
 
     loop {
-        if let Ok(event) = GlobalHotKeyEvent::receiver().recv() {
-            if event.id == hotkey.id() && event.state == HotKeyState::Pressed {
-                let _ = Command::new("sh").arg(&launch_script).spawn();
-            }
+        if let Ok(event) = GlobalHotKeyEvent::receiver().recv()
+            && event.id == hotkey.id()
+            && event.state == HotKeyState::Pressed
+        {
+            let _ = Command::new("sh").arg(&launch_script).spawn();
         }
     }
 }
@@ -470,24 +471,22 @@ pub fn maybe_show_setup_hints() -> Option<StartupHints> {
 
     #[cfg(target_os = "macos")]
     {
-        if state.launch_count % 3 != 0 {
-            return startup_hints;
-        }
-
-        if !state.mac_ghostty_guided && !state.mac_ghostty_dismissed {
+        if !state.launch_count.is_multiple_of(3) {
+            startup_hints
+        } else if !state.mac_ghostty_guided && !state.mac_ghostty_dismissed {
             let mut hints = startup_hints.unwrap_or_default();
             hints.auto_send_message = nudge_macos_ghostty(&mut state);
-            return if hints.auto_send_message.is_none()
+            if hints.auto_send_message.is_none()
                 && hints.status_notice.is_none()
                 && hints.display_message.is_none()
             {
                 None
             } else {
                 Some(hints)
-            };
+            }
+        } else {
+            startup_hints
         }
-
-        return startup_hints;
     }
 
     #[cfg(windows)]
@@ -523,7 +522,7 @@ pub fn run_setup_launcher() -> Result<()> {
                 );
                 eprintln!();
                 eprintln!("  Tip: pin Jcode.app to your Dock or launch it with Cmd+Space.");
-                return Ok(());
+                Ok(())
             }
             Err(e) => {
                 eprintln!("  \x1b[31m✗\x1b[0m Failed: {}", e);

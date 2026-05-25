@@ -158,7 +158,7 @@ pub struct SymbolIndex {
     pub symbols: Vec<SymbolDefinition>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum GraphNodeKind {
     File,
@@ -167,13 +167,8 @@ pub enum GraphNodeKind {
     Route,
     Tool,
     Package,
+    #[default]
     Unknown,
-}
-
-impl Default for GraphNodeKind {
-    fn default() -> Self {
-        Self::Unknown
-    }
 }
 
 impl GraphNodeKind {
@@ -190,7 +185,7 @@ impl GraphNodeKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum GraphEdgeKind {
     Imports,
@@ -206,13 +201,8 @@ pub enum GraphEdgeKind {
     Implements,
     Overrides,
     TypeDependency,
+    #[default]
     Unknown,
-}
-
-impl Default for GraphEdgeKind {
-    fn default() -> Self {
-        Self::Unknown
-    }
 }
 
 impl GraphEdgeKind {
@@ -1712,7 +1702,7 @@ fn build_dependency_graph_from_parts(
         let Some(text) = texts.get(path) else {
             continue;
         };
-        for target in extract_import_targets(path, &text, &paths) {
+        for target in extract_import_targets(path, text, &paths) {
             graph.add_edge(
                 path.clone(),
                 target,

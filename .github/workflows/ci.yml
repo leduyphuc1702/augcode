@@ -168,8 +168,10 @@ jobs:
       - name: Compile library and binary tests
         shell: bash
         run: |
+          export RUSTC="$(rustup which rustc)"
+          CARGO_BIN="$(rustup which cargo)"
           python3 .github/scripts/run_with_timeout.py 900 \
-            "$(rustup which cargo)" test --target ${{ matrix.target }} --lib --bins --no-run
+            "$CARGO_BIN" test --target ${{ matrix.target }} --lib --bins --no-run
 
       - name: Run provider matrix tests
         shell: bash

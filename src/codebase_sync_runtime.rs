@@ -24,10 +24,10 @@ pub fn start_for_session(session_id: String, working_dir: Option<String>) {
     };
     let key = format!("{}:{}", session_id, root.display());
     let started = STARTED.get_or_init(|| Mutex::new(HashSet::new()));
-    if let Ok(mut started) = started.lock() {
-        if !started.insert(key) {
-            return;
-        }
+    if let Ok(mut started) = started.lock()
+        && !started.insert(key)
+    {
+        return;
     }
 
     std::thread::spawn(move || {

@@ -500,6 +500,7 @@ pub(crate) fn draw_workflow_modal(frame: &mut Frame<'_>, area: Rect, state: &Wor
         .expect("workflow modal layout lock") = layout;
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_plan_modal(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -586,6 +587,7 @@ fn draw_plan_modal(
     draw_buttons(frame, chunks[3], &buttons, layout);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_question_modal(
     frame: &mut Frame<'_>,
     area: Rect,

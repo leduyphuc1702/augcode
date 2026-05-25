@@ -43,12 +43,11 @@ impl App {
             Some(resend) => resend,
             None => restored.pending_soft_interrupts,
         };
-        if !has_acknowledged_interrupts {
-            if let Some(interleave_message) = self.interleave_message.take()
-                && !interleave_message.trim().is_empty()
-            {
-                recovered_followups.push(interleave_message);
-            }
+        if !has_acknowledged_interrupts
+            && let Some(interleave_message) = self.interleave_message.take()
+            && !interleave_message.trim().is_empty()
+        {
+            recovered_followups.push(interleave_message);
         }
         if !recovered_interrupts.is_empty() {
             crate::logging::info(&format!(

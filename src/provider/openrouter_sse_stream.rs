@@ -338,16 +338,12 @@ impl OpenRouterStream {
             && let Some(ref incoming_id) = incoming_id
             && !existing.id.is_empty()
             && existing.id != *incoming_id
+            && let Some(previous) = self.tool_call_accumulators.remove(&index)
         {
-            if let Some(previous) = self.tool_call_accumulators.remove(&index) {
-                self.push_completed_tool_call(previous);
-            }
+            self.push_completed_tool_call(previous);
         }
 
-        let tc = self
-            .tool_call_accumulators
-            .entry(index)
-            .or_insert_with(ToolCallAccumulator::default);
+        let tc = self.tool_call_accumulators.entry(index).or_default();
 
         if tc.id.is_empty()
             && let Some(incoming_id) = incoming_id

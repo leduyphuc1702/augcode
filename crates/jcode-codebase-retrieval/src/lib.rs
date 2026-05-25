@@ -197,18 +197,13 @@ pub struct FreshnessLatencyReport {
     pub found: bool,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ImpactDirection {
     Upstream,
     Downstream,
+    #[default]
     Both,
-}
-
-impl Default for ImpactDirection {
-    fn default() -> Self {
-        Self::Both
-    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -611,19 +606,13 @@ impl CodebaseRetrievalEngine {
                 }
             }
         }
-        if report.cases_total > 0 {
-            report.recall_at_5_rate_bps =
-                ((report.recall_at_5_hits * 10_000) / report.cases_total) as u32;
-            report.recall_at_20_rate_bps =
-                ((report.recall_at_20_hits * 10_000) / report.cases_total) as u32;
-            report.precision_at_5_bps = report.precision_at_5_bps / report.cases_total as u32;
-            report.precision_at_20_bps = report.precision_at_20_bps / report.cases_total as u32;
-            report.mrr_bps = report.mrr_bps / report.cases_total as u32;
-            report.graph_contribution_rate_bps = rate_bps(graph_hit_cases, report.cases_total);
-        }
-        if test_expected_cases > 0 {
-            report.impacted_test_recall_bps = rate_bps(test_expected_hits, test_expected_cases);
-        }
+        report.recall_at_5_rate_bps = rate_bps(report.recall_at_5_hits, report.cases_total);
+        report.recall_at_20_rate_bps = rate_bps(report.recall_at_20_hits, report.cases_total);
+        report.precision_at_5_bps = average_bps(report.precision_at_5_bps, report.cases_total);
+        report.precision_at_20_bps = average_bps(report.precision_at_20_bps, report.cases_total);
+        report.mrr_bps = average_bps(report.mrr_bps, report.cases_total);
+        report.graph_contribution_rate_bps = rate_bps(graph_hit_cases, report.cases_total);
+        report.impacted_test_recall_bps = rate_bps(test_expected_hits, test_expected_cases);
         report.categories = categories
             .into_iter()
             .map(
@@ -724,17 +713,15 @@ impl CodebaseRetrievalEngine {
                     || candidate_matches_disk_cached(root, candidate, &mut disk_hash_cache)
                         .unwrap_or(false)
             });
-            if before_validation > candidates.len()
-                || (candidates.is_empty() && req.unsaved_buffers.is_empty())
-            {
-                if let Some((fallback_manifest, fallback_candidates)) =
+            if (before_validation > candidates.len()
+                || (candidates.is_empty() && req.unsaved_buffers.is_empty()))
+                && let Some((fallback_manifest, fallback_candidates)) =
                     search_cold_or_stale_fallback(root, &req)?
-                {
-                    manifest = fallback_manifest;
-                    token = jcode_codebase_sync::SnapshotTokenPayload::from_manifest(&manifest);
-                    candidates.extend(fallback_candidates);
-                    local_overlay_included = true;
-                }
+            {
+                manifest = fallback_manifest;
+                token = jcode_codebase_sync::SnapshotTokenPayload::from_manifest(&manifest);
+                candidates.extend(fallback_candidates);
+                local_overlay_included = true;
             }
         }
         candidates.retain(|candidate| {
@@ -779,11 +766,17 @@ impl CodebaseRetrievalEngine {
 }
 
 fn rate_bps(hits: usize, total: usize) -> u32 {
-    if total == 0 {
-        0
-    } else {
-        ((hits * 10_000) / total) as u32
-    }
+    hits.checked_mul(10_000)
+        .and_then(|scaled| scaled.checked_div(total))
+        .map(|rate| rate as u32)
+        .unwrap_or(0)
+}
+
+fn average_bps(total_bps: u32, total: usize) -> u32 {
+    u32::try_from(total)
+        .ok()
+        .and_then(|total| total_bps.checked_div(total))
+        .unwrap_or(0)
 }
 
 fn precision_bps(paths: &[&str], expected_files: &[String]) -> u32 {
@@ -2578,15 +2571,11 @@ fn source_weight_bonus(why: &str, weights: &SourceWeights) -> usize {
         weights.unsaved_buffer.max(0) as usize
     } else if why.starts_with("saved local overlay") {
         weights.overlay.max(0) as usize
-    } else if why.starts_with("symbol:") {
-        weights.symbol.max(0) as usize
-    } else if why.starts_with("ast:") {
+    } else if why.starts_with("symbol:") || why.starts_with("ast:") {
         weights.symbol.max(0) as usize
     } else if why.starts_with("semantic:") {
         weights.vector.max(0) as usize
-    } else if why.starts_with("dependency graph neighbor") {
-        weights.graph_neighbor.max(0) as usize
-    } else if why.starts_with("related test") {
+    } else if why.starts_with("dependency graph neighbor") || why.starts_with("related test") {
         weights.graph_neighbor.max(0) as usize
     } else if why.starts_with("repo_map:") {
         25
@@ -2675,13 +2664,13 @@ fn compress_candidates_with_trace(
         let mut range = candidate.range.clone();
         let mut cost = range.text.len();
         let mut omitted_reason = None;
-        if used + cost > byte_budget && !files.is_empty() {
-            if let Some(compacted) =
+        if used + cost > byte_budget
+            && !files.is_empty()
+            && let Some(compacted) =
                 compact_range_for_budget(&range, byte_budget.saturating_sub(used))
-            {
-                range = compacted;
-                cost = range.text.len();
-            }
+        {
+            range = compacted;
+            cost = range.text.len();
         }
         if used + cost > byte_budget && !files.is_empty() {
             omitted += 1;

@@ -596,13 +596,13 @@ pub(super) fn clipboard_image() -> Option<(String, String)> {
             .output()
         {
             let result = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if result == "ok" {
-                if let Ok(data) = std::fs::read(&temp_path) {
-                    let _ = std::fs::remove_file(&temp_path);
-                    if !data.is_empty() {
-                        let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
-                        return Some(("image/png".to_string(), b64));
-                    }
+            if result == "ok"
+                && let Ok(data) = std::fs::read(&temp_path)
+            {
+                let _ = std::fs::remove_file(&temp_path);
+                if !data.is_empty() {
+                    let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+                    return Some(("image/png".to_string(), b64));
                 }
             }
         }
@@ -881,7 +881,7 @@ fn sidecar_model_label(provider_model: Option<(&str, &str)>) -> Option<String> {
     }
     let sidecar = provider_model
         .map(|(provider, model)| crate::sidecar::Sidecar::for_provider_model(provider, model))
-        .unwrap_or_else(crate::sidecar::Sidecar::new);
+        .unwrap_or_default();
     Some(sidecar.display_label())
 }
 

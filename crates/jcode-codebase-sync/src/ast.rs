@@ -287,10 +287,10 @@ fn impl_name(bytes: &[u8], node: Node<'_>) -> Option<String> {
 fn first_variable_name(bytes: &[u8], node: Node<'_>) -> Option<String> {
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
-        if child.kind() == "variable_declarator" {
-            if let Some(name) = child.child_by_field_name("name") {
-                return clean_name(name.utf8_text(bytes).ok()?);
-            }
+        if child.kind() == "variable_declarator"
+            && let Some(name) = child.child_by_field_name("name")
+        {
+            return clean_name(name.utf8_text(bytes).ok()?);
         }
     }
     None
