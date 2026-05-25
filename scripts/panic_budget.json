@@ -1,14 +1,12 @@
 {
-  "total": 21,
+  "total": 17,
   "tracked_files": {
-    "crates/jcode-desktop/src/main.rs": 10,
-    "crates/jcode-protocol/src/lib.rs": 1,
-    "crates/jcode-provider-core/src/lib.rs": 1,
-    "src/auth/lifecycle.rs": 1,
+    "crates/jcode-codebase-retrieval/src/lexical_index.rs": 1,
+    "crates/jcode-codebase-sync/src/lib.rs": 1,
+    "crates/jcode-desktop/src/main.rs": 9,
     "src/auth/lifecycle_driver.rs": 2,
     "src/auth/oauth.rs": 3,
-    "src/cli/commands/provider_setup.rs": 2,
-    "src/provider/fingerprint.rs": 1
+    "src/tui/workflow_modal.rs": 1
   },
   "version": 1
 }
