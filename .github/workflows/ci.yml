@@ -13,6 +13,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   SCCACHE_GHA_ENABLED: "true"
+  DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
 
 jobs:
   quality:
@@ -22,13 +23,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ssh-key: ${{ secrets.DEPLOY_KEY }}
+          ssh-key: ${{ env.DEPLOY_KEY }}
           submodules: recursive
 
       - name: Configure SSH for cargo git dependencies
+        if: env.DEPLOY_KEY != ''
         uses: webfactory/ssh-agent@v0.9.0
         with:
-          ssh-private-key: ${{ secrets.DEPLOY_KEY }}
+          ssh-private-key: ${{ env.DEPLOY_KEY }}
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -75,13 +77,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ssh-key: ${{ secrets.DEPLOY_KEY }}
+          ssh-key: ${{ env.DEPLOY_KEY }}
           submodules: recursive
 
       - name: Configure SSH for cargo git dependencies
+        if: env.DEPLOY_KEY != ''
         uses: webfactory/ssh-agent@v0.9.0
         with:
-          ssh-private-key: ${{ secrets.DEPLOY_KEY }}
+          ssh-private-key: ${{ env.DEPLOY_KEY }}
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -116,13 +119,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ssh-key: ${{ secrets.DEPLOY_KEY }}
+          ssh-key: ${{ env.DEPLOY_KEY }}
           submodules: recursive
 
       - name: Configure SSH for cargo git dependencies
+        if: env.DEPLOY_KEY != ''
         uses: webfactory/ssh-agent@v0.9.0
         with:
-          ssh-private-key: ${{ secrets.DEPLOY_KEY }}
+          ssh-private-key: ${{ env.DEPLOY_KEY }}
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -205,13 +209,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ssh-key: ${{ secrets.DEPLOY_KEY }}
+          ssh-key: ${{ env.DEPLOY_KEY }}
           submodules: recursive
 
       - name: Configure SSH for cargo git dependencies
+        if: env.DEPLOY_KEY != ''
         uses: webfactory/ssh-agent@v0.9.0
         with:
-          ssh-private-key: ${{ secrets.DEPLOY_KEY }}
+          ssh-private-key: ${{ env.DEPLOY_KEY }}
 
       - uses: ilammy/msvc-dev-cmd@v1
         with:
@@ -376,13 +381,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ssh-key: ${{ secrets.DEPLOY_KEY }}
+          ssh-key: ${{ env.DEPLOY_KEY }}
           submodules: recursive
 
       - name: Configure SSH for cargo git dependencies
+        if: env.DEPLOY_KEY != ''
         uses: webfactory/ssh-agent@v0.9.0
         with:
-          ssh-private-key: ${{ secrets.DEPLOY_KEY }}
+          ssh-private-key: ${{ env.DEPLOY_KEY }}
 
       - uses: dtolnay/rust-toolchain@stable
         with:
